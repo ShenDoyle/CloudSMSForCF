@@ -1,0 +1,26 @@
+# SMS Gateway — Cloudflare Worker 配置
+# 通过 Cloudflare API / wrangler 均可部署；密钥走 Secrets，不写入本文件
+name = "sms-gateway"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+# 每天 UTC 17:00（北京时间凌晨 1 点）清理超过保留天数的线上短信
+[triggers]
+crons = ["0 17 * * *"]
+
+# 可配置变量（也可部署后在 Dashboard → Worker → Settings → Variables 中修改，改完即时生效，无需改代码）
+[vars]
+# 数据保留天数：定时任务每天删除超过该天数的短信
+RETENTION_DAYS = "30"
+# 管理页登录开关："true" 访问页面需输入密码（密码用 Secret ADMIN_PASSWORD 设置）；"false" 免登录
+ENABLE_AUTH = "false"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sms-gateway-db"
+# database_id：替换为你自己的 D1 数据库 ID（创建数据库后在详情页可见，见 README 第一步）
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# Secrets（wrangler secret put / API 创建）：
+#   RECEIVE_TOKEN — SmsForwarder 推送鉴权 token
+# 自定义域名：绑定 Custom Domain 后 DNS 自动创建（见 README 第六步）
