@@ -3,10 +3,11 @@
 把 Android 手机的短信实时推送到 Cloudflare，通过网页随时查看。基于 SmsForwarder（开源转发 App）+ Cloudflare Workers + D1，无需服务器、零成本、部署约 10 分钟。
 
 ```
-手机 SmsForwarder ──Webhook POST──▶ Cloudflare Worker ──▶ D1 数据库
-                                        │
-浏览器 ◀─────────网页管理页（Worker 内嵌）──┘
-飞书群 ◀───────备份通道（同一条短信，可选）
+安卓 SmsForwarder ──POST /api/receive（短信）──┐
+各平台脚本/快捷指令 ──POST /api/push（通知）──┼──▶ Cloudflare Worker ──▶ D1 数据库
+                                               │
+浏览器 ◀────────────网页管理页（Worker 内嵌）───┘
+飞书群 ◀──────────备份通道（同一类消息，可选）
 ```
 
 ## 功能
@@ -99,7 +100,7 @@
 
 ## 第七步：验证部署
 
-浏览器打开管理页应看到「短信网关」页面（若开了登录则先见登录页）。再验证接收接口（把 `<域名>` 和 `<密钥>` 换成你的）：
+浏览器打开管理页应看到你的网站名页面（默认「短信网关」，可用 `SITE_NAME` 改；若开了登录则先见登录页）。再验证接收接口（把 `<域名>` 和 `<密钥>` 换成你的）：
 
 ```
 curl "https://<域名>/api/receive?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"name\":\"test\",\"sim\":\"13800138000\",\"from\":\"10086\",\"content\":\"部署测试\"}"
@@ -408,7 +409,7 @@ cron 方式（macOS 仍支持）：`crontab -e` 加入 `0 9 * * * /Users/你的�
 | 修改密码 | Dashboard 里重新设置 `ADMIN_PASSWORD`（Secret 不可查看只能重设），旧登录凭证随密码变更立即失效 |
 | 关闭登录 | 把 `ENABLE_AUTH` 改回 `"false"`，所有登录要求立即消失 |
 
-注意：手机推送接口 `/api/receive` 不受此开关影响，始终靠 `RECEIVE_TOKEN` 鉴权。
+注意：推送接口 `/api/receive` 与 `/api/push` 不受此开关影响，始终靠 `RECEIVE_TOKEN` 鉴权。
 
 # 设备标签与收件号显示
 
@@ -416,7 +417,7 @@ cron 方式（macOS 仍支持）：`crontab -e` 加入 `0 9 * * * /Users/你的�
 
 - 标签名随时可改：App 模板里改 `name` 即生效；改了名字会生成一个新标签，旧标签等短信清零后点 × 删除即可
 - `name` 为空 → 标签回退显示 `sim`（手机号），再为空则显示「未命名设备」
-- 也可以给标签起别名：`POST /api/devices/<id>/alias`，body `{"alias":"主号"}`，设置了别名则标签优先显示别名
+- 也可以给标签起别名：`POST /api/devices/alias`，body `{"id":<设备ID>,"alias":"主号"}`（设备 ID 从 `GET /api/devices` 拿；`alias` 传空字符串可清除别名），设置了别名则标签优先显示别名
 
 改标签显示 = 改手机 App 里的消息模板（`name` 字段）或推送请求里的 `name`，重新发一条消息即生效。
 
@@ -440,7 +441,7 @@ cron 方式（macOS 仍支持）：`crontab -e` 加入 `0 9 * * * /Users/你的�
 
 - **通道「测试」通过但真实短信不上来** → 99% 是「转发短信广播」总开关没开；App 转发日志为空是关键证据
 - **网页内容混入号码/卡槽/SubId/时间噪音** → Webhook 消息模板 `content` 没用 `{{SMS}}`，或模板留空走了默认全量模板
-- **标签显示 `{{SIM_SLOT}}` 之类字面量** → 不会发生：Worker 检测到 `{{` 字面量会自动置空；要让标签显示手机号，请在模板 `sim` 字段直接填号码
+- **标签显示 `{{XXX}}` 之类字面量** → 不会发生：Worker 检测到 `{{` 字面量会自动置空，标签回退显示 `sim`；标签名请在模板 `name` 字段直接填自定义名
 - **自行修改内嵌页面后白屏卡「加载中」** → 内嵌 HTML 必须用 `String.raw` 包裹模板字符串，否则 JS 转义序列（`\b`/`\d`/`\s`）会被运行时解析破坏
 - **密钥更换** → Dashboard Secret 与手机 URL 中 `token=` 两处必须同步
 - **`/api/push` 推送成功但网页看不到** → 「来源」下拉还选着「短信」；切回「全部」或对应 source
