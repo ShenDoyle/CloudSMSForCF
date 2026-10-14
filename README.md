@@ -115,11 +115,44 @@ wrangler deploy
 
 ---
 
-# 手机端配置（SmsForwarder）
+# 多平台接入（短信 + 通知）
 
-1. 手机安装 [SmsForwarder](https://github.com/pppscn/SmsForwarder)（酷安/GitHub 下载，包名 `cn.ppps.forwarder`），授予短信、通知权限并允许后台自启
-2. **通用设置 → 打开「转发短信广播」总开关**（⚠️ 最容易漏的一步，关了会静默丢短信，且通道测试全绿也发现不了）
-3. **发送通道 → 新建发送通道 → Webhook 通道**：
+所有平台把消息推进同一个网页：手机短信走 `/api/receive`（只有安卓 SmsForwarder 能读到短信），其余一切通知走通用接口 `/api/push`，两类消息在网页一起展示、按来源筛选、同步转发飞书。
+
+| 接口 | 用途 | 谁在用 |
+|---|---|---|
+| `/api/receive` | 短信入库展示 | 安卓 SmsForwarder（短信规则） |
+| `/api/push` | 通用通知推送 | 安卓 / iOS / Linux / Windows / macOS / 任何能发 HTTP 请求的设备 |
+
+**接口**：`POST https://<你的域名>/api/push`（token 也可放 query：`?token=<RECEIVE_TOKEN>`）
+
+**请求字段**（JSON）：
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `token` | 是 | 鉴权密钥，与 `RECEIVE_TOKEN` 相同 |
+| `content` | 是 | 通知正文（别名 `message` / `text` / `msg` 均可） |
+| `source` | 否 | 来源标识，默认 `notify`；网页顶部「来源」下拉按它筛选，可自定义（如 `cron`、`nas`、`monitor`） |
+| `sender` | 否 | 来源标题，显示在卡片首行（如主机名、App 名、脚本名） |
+| `device` | 否 | 标签名，默认「通知网关」；多台设备用不同名字便于筛选 |
+| `time` | 否 | 秒/毫秒时间戳或文本时间；留空按服务器接收时间 |
+
+所有平台通用的最小示例：
+
+```bash
+curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"source\":\"notify\",\"sender\":\"demo\",\"content\":\"hello from anywhere\"}"
+```
+
+返回 `{"success":true,...}` 即入库；完全相同的重复推送返回 `duplicated:true`，不会重复转发飞书。
+
+## 安卓（SmsForwarder）：短信转发 + 应用通知转发
+
+安卓端统一用 [SmsForwarder](https://github.com/pppscn/SmsForwarder)（酷安/GitHub 下载，包名 `cn.ppps.forwarder`）完成两类转发：短信走 `/api/receive`，App 通知走 `/api/push`。安装后授予短信、通知权限并允许后台自启；应用通知转发还需在系统设置里授予「通知使用权」，并在最近任务里锁定后台、关闭电池优化，防止被杀后台。
+
+### 短信转发（/api/receive）
+
+1. **通用设置 → 打开「转发短信广播」总开关**（⚠️ 最容易漏的一步，关了会静默丢短信，且通道测试全绿也发现不了）
+2. **发送通道 → 新建发送通道 → Webhook 通道**：
    - 请求方式：`POST`
    - URL：`https://<你的域名>/api/receive?token=<你的RECEIVE_TOKEN>`
    - 消息模板——**网页上的「收件号标签」显示的就是 `sim` 字段的值，直接填手机号最直观**（改成你自己的号码）：
@@ -144,42 +177,14 @@ wrangler deploy
    - **同一台手机双卡需区分**：新建两条 Webhook 通道 + 两条转发规则（SIM 卡 1 的规则选通道 A 且模板 `sim` 填卡 1 号码；卡 2 的规则选通道 B 填卡 2 号码）
    - `sim` 留空 → 标签回退显示设备名
    - 若模板里写了 `{{SIM_SLOT}}` 这类变量但 App 没渲染（推过来是 `{{XXX}}` 字面量），Worker 会自动置空，不会产生脏标签
-4. （可选备份通道）**发送通道 → 新建飞书机器人通道**，填群机器人的 Webhook 地址
-5. **转发规则 → 新建规则**：消息类型勾「短信」，处理操作选「个人版」→ 同时勾选上面两个通道，启用
-6. 用另一部手机给你的号码发条真实短信，网页应秒级出现
 
----
+3. （可选备份通道）**发送通道 → 新建飞书机器人通道**，填群机器人的 Webhook 地址
+4. **转发规则 → 新建规则**：消息类型勾「短信」，处理操作选「个人版」→ 同时勾选上面两个通道，启用
+5. 用另一部手机给你的号码发条真实短信，网页应秒级出现
 
-# 多平台接入（不止短信）：通用推送接口 /api/push
+### 应用通知转发（/api/push）
 
-除了手机短信，任何能发 HTTP 请求的设备、脚本、自动化都可以把通知推进同一个网页，与短信一起展示、按来源筛选、同步转发飞书。
-
-**接口**：`POST https://<你的域名>/api/push`（token 也可放 query：`?token=<RECEIVE_TOKEN>`）
-
-**请求字段**（JSON）：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `token` | 是 | 鉴权密钥，与 `RECEIVE_TOKEN` 相同 |
-| `content` | 是 | 通知正文（别名 `message` / `text` / `msg` 均可） |
-| `source` | 否 | 来源标识，默认 `notify`；网页顶部「来源」下拉按它筛选，可自定义（如 `cron`、`nas`、`monitor`） |
-| `sender` | 否 | 来源标题，显示在卡片首行（如主机名、App 名、脚本名） |
-| `device` | 否 | 标签名，默认「通知网关」；多台设备用不同名字便于筛选 |
-| `time` | 否 | 秒/毫秒时间戳或文本时间；留空按服务器接收时间 |
-
-所有平台通用的最小示例：
-
-```bash
-curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"source\":\"notify\",\"sender\":\"demo\",\"content\":\"hello from anywhere\"}"
-```
-
-返回 `{"success":true,...}` 即入库；完全相同的重复推送返回 `duplicated:true`，不会重复转发飞书。
-
-## 安卓：应用通知转发（SmsForwarder）
-
-复用手机上已装的 SmsForwarder，把微信、银行、购物等各类 App 通知也推上来。
-
-**前置**：SmsForwarder 已授予「通知使用权」（系统设置 → 通知读取权限），并在最近任务里锁定后台、关闭电池优化，防止被杀后台。
+复用同一个 App，把微信、银行、购物等各类 App 通知也推上来：
 
 1. **发送通道 → 新建发送通道 → Webhook 通道**：
    - 请求方式：`POST`
@@ -204,7 +209,7 @@ curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: a
    - （可选）只转发指定 App：在规则里勾选要监听的应用
    - 处理操作：选上面新建的 Webhook 通道，启用规则
 3. 点通道「测试」或在手机上触发一条真实通知，网页「来源」下拉切到对应来源即可看到
-4. 通知转发与短信转发互不影响：同一台手机可同时保留短信链路（`/api/receive`）与通知链路（`/api/push`），各自独立建通道和规则
+4. 通知转发与短信转发互不影响：同一台手机可同时保留两条链路，各自独立建通道和规则
 
 ## iOS / iPadOS：快捷指令
 
@@ -382,7 +387,7 @@ cron 方式（macOS 仍支持）：`crontab -e` 加入 `0 9 * * * /Users/你的�
 
 > 进阶：已使用 [Apprise](https://github.com/caronc/apprise)、ntfy 等通知聚合工具的设备，可在其自定义 JSON Webhook / 脚本输出里对接本接口，无需逐台改脚本。
 
-**多平台接入验证清单**：
+## 接入验证清单
 
 1. curl/脚本推送一条 → 接口返回 `success:true`
 2. 网页「来源」下拉切到对应 source（或「全部」）→ 卡片出现，左上角显示来源徽章与 sender
