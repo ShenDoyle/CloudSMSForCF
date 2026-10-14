@@ -398,6 +398,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="https://cdn.jsdelivr.net/gh/ShenDoyle/ShenDoyle.github.io@main/img/site/favicon.ico">
 <title>短信网关</title>
 <style>
   :root {
@@ -804,6 +805,7 @@ const LOGIN_HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="https://cdn.jsdelivr.net/gh/ShenDoyle/ShenDoyle.github.io@main/img/site/favicon.ico">
 <title>短信网关 - 登录</title>
 <style>
   :root { --bg: #f5f6f7; --card: #fff; --text: #20242a; --border: #e3e6e9; --input-border: #d8dce0; }
