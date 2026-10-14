@@ -20,6 +20,7 @@
 - **收件号标签**：标签显示什么由手机 App 消息模板的 `sim` 字段决定（推荐直接填手机号），顶部标签筛选；无短信的标签可点 × 删除
 - **可选登录**：一个开关决定管理页是否需要密码登录（见下文配置项）
 - **保留天数可调**：默认 30 天，改个数字即可（见下文配置项）
+- **多平台接入**：不止短信——Linux/Windows/macOS/iOS/安卓的通知都能经通用接口 `/api/push` 推进来，网页按「来源」筛选
 - **双通道备份**：Cloudflare + 飞书机器人同时推送，防单点丢失（可选）
 
 ## 配置项一览
@@ -149,6 +150,122 @@ wrangler deploy
 
 ---
 
+# 多平台接入（不止短信）：通用推送接口 /api/push
+
+除了手机短信，任何能发 HTTP 请求的设备、脚本、自动化都可以把通知推进同一个网页，与短信一起展示、按来源筛选、同步转发飞书。
+
+**接口**：`POST https://<你的域名>/api/push`（token 也可放 query：`?token=<RECEIVE_TOKEN>`）
+
+**请求字段**（JSON）：
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `token` | 是 | 鉴权密钥，与 `RECEIVE_TOKEN` 相同 |
+| `content` | 是 | 通知正文（别名 `message` / `text` / `msg` 均可） |
+| `source` | 否 | 来源标识，默认 `notify`；网页顶部「来源」下拉按它筛选，可自定义（如 `cron`、`nas`、`monitor`） |
+| `sender` | 否 | 来源标题，显示在卡片首行（如主机名、App 名、脚本名） |
+| `device` | 否 | 标签名，默认「通知网关」；多台设备用不同名字便于筛选 |
+| `time` | 否 | 秒/毫秒时间戳或文本时间；留空按服务器接收时间 |
+
+所有平台通用的最小示例：
+
+```bash
+curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"source\":\"notify\",\"sender\":\"demo\",\"content\":\"hello from anywhere\"}"
+```
+
+返回 `{"success":true,...}` 即入库；完全相同的重复推送返回 `duplicated:true`，不会重复转发飞书。
+
+## 安卓：应用通知转发（SmsForwarder）
+
+复用手机上已装的 SmsForwarder，把各类 App 通知也推上来：
+
+1. **发送通道 → 新建 Webhook 通道**，请求方式 `POST`，URL 填 `https://<你的域名>/api/push?token=<RECEIVE_TOKEN>`，消息模板：
+
+   ```json
+   {"source":"notify","sender":"{{APP_NAME}}","content":"{{TITLE}}：{{MSG}}","device":"安卓手机"}
+   ```
+
+2. **转发规则 → 新建规则**：消息类型勾「应用通知」，处理操作选这条通道，启用
+3. 收到微信/银行等 App 通知后，网页「来源」下拉切换到对应来源即可查看
+
+## iOS / iPadOS：快捷指令自动化
+
+1. 快捷指令 App → **自动化 → 新建**（触发条件可选「收到短信时」「特定 App 通知时」「特定时间」等）
+2. 添加动作：**获取文本**（拼出正文）→ **获取 URL 内容**：
+   - URL：`https://<你的域名>/api/push?token=<RECEIVE_TOKEN>`
+   - 方法：`POST`，头部 `Content-Type: application/json`
+   - 请求体（JSON）：
+
+   ```json
+   {"source":"notify","sender":"iPhone","content":"上一步传入的文本","device":"iOS"}
+   ```
+
+3. 关闭「运行前询问」即可全自动推送
+
+## Linux：curl + cron
+
+脚本 `/usr/local/bin/push-note.sh`：
+
+```bash
+#!/usr/bin/env bash
+# 用法：push-note.sh "通知内容"
+curl -s "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"source\":\"notify\",\"sender\":\"$(hostname)\",\"content\":\"$1\",\"device\":\"Linux 服务器\"}"
+```
+
+启用与定时示例（磁盘超 90% 自动告警）：
+
+```bash
+chmod +x /usr/local/bin/push-note.sh
+/usr/local/bin/push-note.sh "手动测试"
+
+# crontab -e 加入：
+*/5 * * * * use=$(df / | awk 'NR==2{gsub("%","",$5);print $5}'); [ "$use" -ge 90 ] && /usr/local/bin/push-note.sh "根目录使用率 ${use}%"
+```
+
+用 systemd 系统化管理的场景，把上面的命令写进 `ExecStart` 的 service + timer 同样适用。
+
+## Windows：PowerShell + 任务计划程序
+
+脚本 `C:\scripts\push-note.ps1`：
+
+```powershell
+param([string]$Text = "测试通知")
+$body = @{
+  token   = "<RECEIVE_TOKEN>"
+  source  = "notify"
+  sender  = $env:COMPUTERNAME
+  content = $Text
+  device  = "Windows 主机"
+} | ConvertTo-Json
+Invoke-RestMethod -Uri "https://<你的域名>/api/push" -Method Post -ContentType "application/json; charset=utf-8" -Body $body
+```
+
+- 手动测试：`powershell -ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 "备份完成"`
+- 定时推送：**任务计划程序 → 创建基本任务**，操作填 `powershell -ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 "每日备份已完成"`
+
+## macOS：快捷指令或 launchd/cron
+
+- 快捷指令：与 iOS 做法完全相同
+- 脚本定时：新建 `~/push-note.sh`（内容同 Linux 脚本，`device` 改成 `macOS`），再挂 cron：
+
+```bash
+chmod +x ~/push-note.sh
+# crontab -e 加入（每天 9 点推送）：
+0 9 * * * /Users/你的用户名/push-note.sh "早晨日报"
+```
+
+> 进阶：已使用 [Apprise](https://github.com/caronc/apprise)、ntfy 等通知聚合工具的设备，可在其自定义 JSON Webhook / 脚本输出里对接本接口，无需逐台改脚本。
+
+**多平台接入验证清单**：
+
+1. curl/脚本推送一条 → 接口返回 `success:true`
+2. 网页「来源」下拉切到对应 source（或「全部」）→ 卡片出现，左上角显示来源徽章与 sender
+3. 同一条重复推送 → 返回 `duplicated:true`，飞书群不重复收到
+
+---
+
 # 管理页登录开关（ENABLE_AUTH）
 
 | 场景 | 做法 |
@@ -175,6 +292,7 @@ wrangler deploy
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST/GET` | `/api/receive?token=<密钥>` | 接收短信（兼容 JSON/表单/纯文本/query，字段多别名） |
+| `POST` | `/api/push` | 通用推送（多平台通知），字段说明见「多平台接入」一节 |
 | `GET` | `/api/messages?device_id=&q=&page=&limit=` | 分页查短信 |
 | `DELETE` | `/api/messages/<id>` | 删除单条 |
 | `GET` | `/api/devices` | 设备列表（含条数/最近时间） |
@@ -192,6 +310,8 @@ wrangler deploy
 - **标签显示 `{{SIM_SLOT}}` 之类字面量** → 不会发生：Worker 检测到 `{{` 字面量会自动置空；要让标签显示手机号，请在模板 `sim` 字段直接填号码
 - **自行修改内嵌页面后白屏卡「加载中」** → 内嵌 HTML 必须用 `String.raw` 包裹模板字符串，否则 JS 转义序列（`\b`/`\d`/`\s`）会被运行时解析破坏
 - **密钥更换** → Dashboard Secret 与手机 URL 中 `token=` 两处必须同步
+- **`/api/push` 推送成功但网页看不到** → 「来源」下拉还选着「短信」；切回「全部」或对应 source
+- **通知类消息首行显示什么** → 左上角绿色徽章是 `source`，其后是 `sender`；都没填则显示「通知」/「通知网关」
 
 ---
 
