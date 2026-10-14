@@ -1,6 +1,7 @@
 /**
  * CloudSMSForCF — 腾讯 EdgeOne Pages Functions 入口（[[default]].js 兜底捕获全部路由）
- * 产物目录 = platforms/dist/edgeone（由 platforms/build.py 生成），部署见 platforms/README.md
+ * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
+ * 直接把 edgeone/ 作为项目根目录部署即可（见 platforms/README.md「EdgeOne Pages」）。
  *
  * 说明：
  *  - EdgeOne Functions 提供 Web 标准 Request/Response，与核心应用零转换；
@@ -8,8 +9,8 @@
  *    GET /api/cron?token=<RECEIVE_TOKEN>；
  *  - 若你的 EdgeOne 版本对兜底路由文件名要求不同，可把本文件改名为 [[path]].js（与 CF Pages 一致）。
  */
-import { fetchApp, handleCronRequest } from "../../shared/app.js";
-import { createTursoDb } from "../../shared/db.js";
+import { fetchApp, handleCronRequest } from "../app.js";
+import { createTursoDb } from "../db.js";
 
 let cachedDb = null;
 

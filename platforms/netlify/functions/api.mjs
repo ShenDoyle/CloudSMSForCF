@@ -1,6 +1,7 @@
 /**
  * CloudSMSForCF — Netlify Functions v2 入口（path "/*" 捕获全部路由）
- * 产物目录 = platforms/dist/netlify（由 platforms/build.py 生成），部署见 platforms/README.md
+ * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
+ * 直接把 netlify/ 作为 base 目录部署即可（见 platforms/README.md「Netlify」）。
  *
  * 说明：
  *  - 运行于 Node 且原生支持 Web 标准 Request/Response，与核心应用零转换；
@@ -9,8 +10,8 @@
  *  - 定时清理：functions/cron.mjs 为 Netlify Scheduled Function（每天 UTC 17:00）；
  *    也可用外部 cron 调用 GET /api/cron?token=<RECEIVE_TOKEN>。
  */
-import { fetchApp, handleCronRequest } from "../../shared/app.js";
-import { createTursoDb } from "../../shared/db.js";
+import { fetchApp, handleCronRequest } from "../app.js";
+import { createTursoDb } from "../db.js";
 
 /* 捕获所有路径，统一交给核心应用路由处理 */
 export const config = { path: "/*" };

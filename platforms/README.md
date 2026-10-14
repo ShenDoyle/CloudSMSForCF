@@ -1,23 +1,29 @@
 # CloudSMSForCF 多平台部署
 
-本项目除 Cloudflare Worker 主版本外，提供以下平台的移植版本。**核心业务代码完全一致**：
+本项目除 Cloudflare Worker 主版本外，提供以下平台的移植版本。**五个平台功能完全一致**：
+接口路径、鉴权逻辑、消息模型、管理页、飞书转发、每日定时清理（UTC 17:00）均与 Worker 版相同。
 
 ```
 platforms/
-├── shared/
-│   ├── app.js    # 核心应用：由 platforms/gen_app.py 从 src/worker.js 生成，业务逻辑逐字节一致
-│   └── db.js     # Turso 数据库适配层：纯 fetch 实现，提供与 Cloudflare D1 一致的接口
-├── vercel/       # Vercel Edge Function 入口 + crons 配置
-├── netlify/      # Netlify Functions v2 入口 + Scheduled Function
-├── deno/         # Deno Deploy 入口（Deno.serve + Deno.cron）
-├── edgeone/      # 腾讯 EdgeOne Pages Functions 入口
-├── node/         # Node.js 自托管入口 + Dockerfile（Fly.io / Railway / VPS 通用）
-├── build.py      # 构建脚本：生成自包含部署产物到 platforms/dist/<平台>/
-└── gen_app.py    # app.js 生成器：src/worker.js 有更新后重新执行即可
+├── vercel/    # Vercel Edge Function（api/[[...route]].js + app.js + db.js + vercel.json + schema.sql）
+├── netlify/   # Netlify Functions v2（functions/{api,cron}.mjs + app.js + db.js + netlify.toml + schema.sql）
+├── deno/      # Deno Deploy（main.js + app.js + db.js + schema.sql）
+├── edgeone/   # 腾讯 EdgeOne Pages Functions（functions/[[default]].js + app.js + db.js + schema.sql）
+├── node/      # Node.js 自托管（server.mjs + app.js + db.js + Dockerfile + schema.sql）
+├── shared/    # 唯一源：app.js / db.js 的生成源（gen_app.py 由此同步到各平台目录）
+└── gen_app.py # 生成器：从 src/worker.js 生成 app.js 并同步各平台副本
 ```
 
-唯一的外部依赖是数据库：以 [Turso](https://turso.tech)（SQLite 兼容、免费额度充足）替代 Cloudflare D1，
-项目 [schema.sql](../schema.sql) 可直接使用，业务 SQL 零改动。
+每个平台目录**完全自包含**：只引用本目录内的 `app.js`（核心应用）与 `db.js`（Turso 适配层），
+零 npm 依赖、无需构建步骤，把单个目录作为独立项目即可部署，平台之间互不影响。
+
+- **app.js** 由 `gen_app.py` 从 `src/worker.js` 生成，业务代码与 Worker 版**逐字节一致**，
+  仅把 Workers 专属的 `export default` 替换为通用导出（`fetchApp` / `runCron` / `handleCronRequest`）
+- **db.js** 是 Turso 适配层（纯 fetch 实现），对外提供与 Cloudflare D1 一致的
+  `prepare().bind().first()/all()/run()` 接口，业务 SQL 零改动；
+  项目根目录 [schema.sql](../schema.sql) 可直接用于建表（各平台目录内含同名副本）
+
+> `src/worker.js` 有更新后：`python platforms/gen_app.py` 一键重新生成并同步五个平台。
 
 ---
 
@@ -60,9 +66,10 @@ turso db tokens create sms-gateway   # 创建访问令牌（只显示一次，�
 turso db shell sms-gateway < schema.sql
 ```
 
-或在 Turso 网页控制台 → 数据库 → Console 中，粘贴 [schema.sql](../schema.sql) 全部内容执行。
+或在 Turso 网页控制台 → 数据库 → Console 中，粘贴 schema.sql 全部内容执行。
+（各平台目录内均含 schema.sql 副本；仓库根目录的 schema.sql 与之相同。）
 
-### 3. 环境变量（各平台设置面板中配置）
+### 3. 环境变量（各平台设置面板中配置，五个平台一致）
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
@@ -74,21 +81,13 @@ turso db shell sms-gateway < schema.sql
 | `RETENTION_DAYS` | 否 | 数据保留天数，默认 30 |
 | `FEISHU_WEBHOOK` | 否 | 飞书机器人 Webhook，配置后新消息自动转发飞书群 |
 | `SITE_NAME` / `SITE_ICON` | 否 | 网站名 / 图标 URL，未设置用默认值 |
+| `CRON_SECRET`（仅 Vercel） | 否 | 设为与 `RECEIVE_TOKEN` 相同值，供 Vercel Cron 调 /api/cron |
 
-### 4. 生成本平台部署产物
-
-```bash
-python platforms/build.py            # 全部平台
-python platforms/build.py --only node   # 仅某平台
-```
-
-产物输出到 `platforms/dist/<平台>/`（已 gitignore），每个目录**自包含**（含 shared 适配层与
-schema.sql 副本），可直接部署。
-
-### 5. 切换接入端
+### 4. 切换接入端
 
 手机端 SmsForwarder 与各平台推送脚本只需把 Webhook URL 的域名换成新平台分配的域名，
-路径与 token 保持不变（`/api/receive`、`/api/push` 行为与 Worker 版完全一致）。
+路径与 token 保持不变（`/api/receive`、`/api/push` 行为与 Worker 版完全一致，
+消息模板与字段说明见根目录 [多平台接入部署指南](../docs/多平台接入部署指南.md)）。
 
 ---
 
@@ -96,37 +95,31 @@ schema.sql 副本），可直接部署。
 
 ### Vercel
 
-1. `cd platforms/dist/vercel`
-2. `npm i -g vercel`（首次）→ `vercel login`
-3. `vercel`（首次创建项目，默认选项即可）→ 在 Dashboard → Settings → Environment Variables
-   添加第二节的环境变量，**另加** `CRON_SECRET` = 与 `RECEIVE_TOKEN` 相同的值
-   （Vercel Cron 会自动附带 `Authorization: Bearer $CRON_SECRET` 调用 /api/cron）
-4. `vercel --prod` 重新部署生效
-5. 定时清理已由 [vercel.json](vercel/vercel.json) 配置：每天 UTC 17:00（北京 01:00）
+1. Dashboard → Add New → Project → Import 仓库时把 **Root Directory 设为 `platforms/vercel`**；
+   或本地：`cd platforms/vercel && npx vercel`（首次创建项目，默认选项即可）
+2. Dashboard → Settings → Environment Variables 配置第二节的环境变量
+   （**另加** `CRON_SECRET` = 与 `RECEIVE_TOKEN` 相同的值，Vercel Cron 会自动附带
+   `Authorization: Bearer $CRON_SECRET` 调用 /api/cron）
+3. 重新部署后生效；定时清理已由 [vercel.json](vercel/vercel.json) 配置：每天 UTC 17:00（北京 01:00）
 
 ### Deno Deploy
 
-1. `deno install -g deployctl`（或 `npm i -g deployctl`）
-2. Dashboard 创建项目并记下名称；Settings → Environment Variables 配置第二节变量
-3. 在仓库根目录执行：
-   ```bash
-   deployctl deploy --project <项目名> --entrypoint platforms/deno/main.js --root . --prod
-   ```
-4. 定时清理由 `Deno.cron` 自动注册，无需额外配置
+1. Dashboard 创建项目并记下名称；Settings → Environment Variables 配置第二节变量
+2. 关联 GitHub 仓库部署：Build Configuration 中
+   **Root Directory 填 `platforms/deno`**，Entrypoint 填 `main.js`
+3. 定时清理由 `Deno.cron` 自动注册，无需额外配置
 
 ### Netlify
 
-1. `cd platforms/dist/netlify`
-2. `npm i -g netlify-cli`（首次）→ `netlify login`
-3. `netlify init`（关联/创建站点）
-4. Dashboard → Site settings → Environment variables 配置第二节变量
-5. `netlify deploy --prod`
-6. 定时清理由 [functions/cron.mjs](netlify/functions/cron.mjs)（Scheduled Function，每天 UTC 17:00）自动生效
+1. Dashboard → Add new site → Import an existing project，选仓库后把
+   **Base directory 设为 `platforms/netlify`**（netlify.toml 已在目录内）
+2. Site configuration → Environment variables 配置第二节变量
+3. 部署后生效；定时清理由 `functions/cron.mjs`（Scheduled Function，每天 UTC 17:00）自动注册
 
 ### EdgeOne Pages（腾讯）
 
-1. 腾讯云控制台 → EdgeOne Pages → 创建项目，选择「直接上传」并上传 `platforms/dist/edgeone`
-   整个目录（或推到 Git 仓库后选择该目录作为根目录）
+1. 腾讯云控制台 → EdgeOne Pages → 创建项目，选择从 Git 仓库导入并把
+   **根目录设为 `platforms/edgeone`**（或直接上传本目录全部文件）
 2. 项目设置 → 环境变量，配置第二节变量
 3. 部署完成后绑定域名即可访问
 4. 定时清理：平台暂无原生定时任务，用任一外部 cron 服务（如 cron-job.org）每天定时
@@ -136,12 +129,12 @@ schema.sql 副本），可直接部署。
 
 ### Fly.io / Railway（Docker 自托管）
 
-产物：`platforms/dist/node`（Node 20 + 零 npm 依赖，进程常驻，内置每日 UTC 17:00 清理）。
+目录：`platforms/node`（Node 20 + 零 npm 依赖，进程常驻，内置每日 UTC 17:00 清理）。
 
 **Fly.io：**
 
 ```bash
-cd platforms/dist/node
+cd platforms/node
 fly launch                 # 按提示创建应用（区域自选，不配置数据库——我们用 Turso）
 fly secrets set TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... RECEIVE_TOKEN=...
 fly secrets set ENABLE_AUTH=true ADMIN_PASSWORD=...   # 可选
@@ -151,8 +144,7 @@ fly status                 # 记下分配的域名 https://<app>.fly.dev
 
 **Railway：**
 
-1. Railway 控制台 → New Project → Deploy from GitHub repo（把 dist/node 单独推成一个仓库）
-   或选择 Docker Image 部署
+1. Railway 控制台 → New Project → Deploy from GitHub repo，**Root Directory 设为 `platforms/node`**
 2. Variables 面板配置第二节变量（`PORT` 平台自动注入，代码已适配）
 3. Networking → Generate Domain 获得公网地址
 
@@ -173,8 +165,7 @@ fly status                 # 记下分配的域名 https://<app>.fly.dev
 ## 五、其他说明
 
 - 所有平台的 API 路径与 Worker 版一致：`/api/receive`、`/api/push`、`/api/messages`、
-  `/api/devices`、`/api/wait`、`/api/login`、`/api/logout`、`/api/cron`
+  `/api/devices`、`/api/devices/alias`、`/api/wait`、`/api/login`、`/api/logout`、`/api/cron`
 - `/api/cron` 供外部调度器触发清理，鉴权方式：`?token=<RECEIVE_TOKEN>` 或
   `Authorization: Bearer <RECEIVE_TOKEN>`
-- `src/worker.js` 有更新后：`python platforms/gen_app.py && python platforms/build.py`
-  重新生成核心与产物，再重新部署即可
+- `/api/receive` 与 `/api/push` 不受登录开关影响，与 Worker 版一致

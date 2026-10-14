@@ -1,14 +1,15 @@
 /**
  * CloudSMSForCF — Deno Deploy 入口
- * 产物目录 = platforms/dist/deno（由 platforms/build.py 生成），部署见 platforms/README.md
+ * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
+ * 直接部署本目录的 main.js 即可（见 platforms/README.md「Deno Deploy」）。
  *
  * 说明：
  *  - Deno.serve + Web 标准 Request/Response，与核心应用零转换；
  *  - Deno.cron 为平台原生定时任务（每天 UTC 17:00 = 北京 01:00）；
  *  - /api/cron 也可由外部 cron 调用：GET /api/cron?token=<RECEIVE_TOKEN>。
  */
-import { fetchApp, runCron, handleCronRequest } from "../../shared/app.js";
-import { createTursoDb } from "../../shared/db.js";
+import { fetchApp, runCron, handleCronRequest } from "./app.js";
+import { createTursoDb } from "./db.js";
 
 let cachedDb = null;
 

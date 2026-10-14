@@ -1,6 +1,7 @@
 /**
  * CloudSMSForCF — Vercel Edge Function 入口（catch-all：捕获全部路径）
- * 产物目录 = platforms/dist/vercel（由 platforms/build.py 生成），部署见 platforms/README.md
+ * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
+ * 直接把 vercel/ 作为项目根目录部署即可（见 platforms/README.md「Vercel」）。
  *
  * 说明：
  *  - runtime=edge：直接使用 Web 标准 Request/Response，与核心应用零转换；
@@ -9,8 +10,8 @@
  *    Vercel Cron 会自动附带 Authorization: Bearer $CRON_SECRET，
  *    请把环境变量 CRON_SECRET 设为与 RECEIVE_TOKEN 相同的值。
  */
-import { fetchApp, handleCronRequest } from "../../shared/app.js";
-import { createTursoDb } from "../../shared/db.js";
+import { fetchApp, handleCronRequest } from "../app.js";
+import { createTursoDb } from "../db.js";
 
 export const config = { runtime: "edge" };
 

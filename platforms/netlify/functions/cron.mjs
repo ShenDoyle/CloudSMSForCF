@@ -3,8 +3,8 @@
  * 与 Cloudflare Worker 版 [triggers] crons = ["0 17 * * *"] 行为一致。
  * 也可改用外部 cron 调用 GET /api/cron?token=<RECEIVE_TOKEN>，二者取其一即可。
  */
-import { runCron } from "../../shared/app.js";
-import { createTursoDb } from "../../shared/db.js";
+import { runCron } from "../app.js";
+import { createTursoDb } from "../db.js";
 
 export const config = { schedule: "0 17 * * *" };
 

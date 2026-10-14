@@ -1,8 +1,9 @@
 /**
  * CloudSMSForCF — Node.js 自托管入口（Node 18+，零 npm 依赖）
- * 适用：Fly.io / Railway / 任意 VPS / 本地调试（产物目录 = platforms/dist/node）
+ * 适用：Fly.io / Railway / 任意 VPS / 本地调试。
+ * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
+ * 配合同目录 Dockerfile 可直接部署（见 platforms/README.md「Fly.io / Railway」）。
  *   本地启动：TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... RECEIVE_TOKEN=... node server.mjs
- *   Docker：  见同目录 Dockerfile（Fly.io / Railway 直接可用）
  *
  * 说明：
  *  - 内置每日清理：UTC 17:00（北京 01:00）自动执行；
@@ -11,8 +12,8 @@
  */
 import http from "node:http";
 import { Readable } from "node:stream";
-import { fetchApp, runCron, handleCronRequest } from "../../shared/app.js";
-import { createTursoDb } from "../../shared/db.js";
+import { fetchApp, runCron, handleCronRequest } from "./app.js";
+import { createTursoDb } from "./db.js";
 
 let cachedDb = null;
 

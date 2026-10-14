@@ -1,6 +1,8 @@
 # CloudSMSForCF — 手机短信接入 Cloudflare 网页
 
-把 Android 手机的短信实时推送到 Cloudflare，通过网页随时查看。基于 SmsForwarder（开源转发 App）+ Cloudflare Workers + D1，无需服务器、零成本、部署约 10 分钟。
+把 Android 手机的短信实时推送到云端，通过网页随时查看。基于 SmsForwarder（开源转发 App）+ Cloudflare Workers + D1，无需服务器、零成本、部署约 10 分钟。
+
+> 除 Cloudflare Worker 主版本外，本项目还提供 Vercel / Deno Deploy / Netlify / 腾讯 EdgeOne / Docker 自托管（Fly.io、Railway、VPS）的移植版本，功能与 Worker 版完全一致，见 [platforms/README.md](platforms/README.md)。
 
 ```
 安卓 SmsForwarder ──POST /api/receive（短信）──┐
@@ -118,6 +120,21 @@ wrangler secret put RECEIVE_TOKEN
 wrangler secret put ADMIN_PASSWORD   # 仅开登录时需要
 wrangler deploy
 ```
+
+## 多平台部署（不用 Cloudflare 也可以）
+
+项目核心逻辑已抽离为平台无关版本，可部署到以下任一平台（数据库用 Turso，业务 SQL 与 D1 完全一致）：
+
+| 平台 | 部署方式 | 定时清理 |
+|---|---|---|
+| Vercel | Edge Function | 平台 cron |
+| Deno Deploy | Deno 原生 | Deno.cron |
+| Netlify | Functions v2 | Scheduled Function |
+| 腾讯 EdgeOne Pages | Functions | 外部 cron 调 /api/cron |
+| Fly.io / Railway / VPS | Docker（Node 20） | 进程内置 |
+
+每个平台目录自包含（零依赖、无需构建），接口路径、鉴权、管理页、飞书转发与 Worker 版完全一致。
+分平台部署步骤见 [platforms/README.md](platforms/README.md)。
 
 ---
 
