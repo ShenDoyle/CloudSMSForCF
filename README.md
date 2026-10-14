@@ -192,3 +192,9 @@ wrangler deploy
 - **标签显示 `{{SIM_SLOT}}` 之类字面量** → 不会发生：Worker 检测到 `{{` 字面量会自动置空；要让标签显示手机号，请在模板 `sim` 字段直接填号码
 - **自行修改内嵌页面后白屏卡「加载中」** → 内嵌 HTML 必须用 `String.raw` 包裹模板字符串，否则 JS 转义序列（`\b`/`\d`/`\s`）会被运行时解析破坏
 - **密钥更换** → Dashboard Secret 与手机 URL 中 `token=` 两处必须同步
+
+---
+
+# 许可证
+
+[MIT License](LICENSE) © 2026 [左立方](https://cbm.im)
