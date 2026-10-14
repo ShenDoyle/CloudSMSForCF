@@ -177,58 +177,123 @@ curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: a
 
 ## 安卓：应用通知转发（SmsForwarder）
 
-复用手机上已装的 SmsForwarder，把各类 App 通知也推上来：
+复用手机上已装的 SmsForwarder，把微信、银行、购物等各类 App 通知也推上来。
 
-1. **发送通道 → 新建 Webhook 通道**，请求方式 `POST`，URL 填 `https://<你的域名>/api/push?token=<RECEIVE_TOKEN>`，消息模板：
+**前置**：SmsForwarder 已授予「通知使用权」（系统设置 → 通知读取权限），并在最近任务里锁定后台、关闭电池优化，防止被杀后台。
 
-   ```json
-   {"source":"notify","sender":"{{APP_NAME}}","content":"{{TITLE}}：{{MSG}}","device":"安卓手机"}
-   ```
-
-2. **转发规则 → 新建规则**：消息类型勾「应用通知」，处理操作选这条通道，启用
-3. 收到微信/银行等 App 通知后，网页「来源」下拉切换到对应来源即可查看
-
-## iOS / iPadOS：快捷指令自动化
-
-1. 快捷指令 App → **自动化 → 新建**（触发条件可选「收到短信时」「特定 App 通知时」「特定时间」等）
-2. 添加动作：**获取文本**（拼出正文）→ **获取 URL 内容**：
+1. **发送通道 → 新建发送通道 → Webhook 通道**：
+   - 请求方式：`POST`
    - URL：`https://<你的域名>/api/push?token=<RECEIVE_TOKEN>`
-   - 方法：`POST`，头部 `Content-Type: application/json`
-   - 请求体（JSON）：
+   - 消息模板：
 
-   ```json
-   {"source":"notify","sender":"iPhone","content":"上一步传入的文本","device":"iOS"}
-   ```
+     ```json
+     {"source":"notify","sender":"{{APP_NAME}}","content":"{{TITLE}}：{{MSG}}","device":"安卓手机"}
+     ```
 
-3. 关闭「运行前询问」即可全自动推送
+   通知类模板变量：
 
-## Linux：curl + cron
+   | 变量 | 含义 |
+   |---|---|
+   | `{{APP_NAME}}` | App 名称（如 微信），作 sender 显示在卡片首行 |
+   | `{{APP_PKG}}` | App 包名（如 com.tencent.mm） |
+   | `{{TITLE}}` | 通知标题 |
+   | `{{MSG}}` | 通知正文 |
 
-脚本 `/usr/local/bin/push-note.sh`：
+2. **转发规则 → 新建规则**：
+   - 消息类型：勾「应用通知」
+   - （可选）只转发指定 App：在规则里勾选要监听的应用
+   - 处理操作：选上面新建的 Webhook 通道，启用规则
+3. 点通道「测试」或在手机上触发一条真实通知，网页「来源」下拉切到对应来源即可看到
+4. 通知转发与短信转发互不影响：同一台手机可同时保留短信链路（`/api/receive`）与通知链路（`/api/push`），各自独立建通道和规则
+
+## iOS / iPadOS：快捷指令
+
+iOS 出于隐私限制，快捷指令**无法自动读取短信正文**，按用途选下面两种方式：
+
+**方式 A：手动转发（能带上原文内容）**
+
+1. 快捷指令 App → 「+」新建，命名如「推送到短信网关」
+2. 添加动作 **获取剪贴板**（转发前先复制要推的内容）
+3. 添加动作 **获取 URL 内容**：
+   - URL：`https://<你的域名>/api/push?token=<RECEIVE_TOKEN>`
+   - 方法：`POST`
+   - 请求头：`Content-Type` = `application/json`
+   - 请求体（JSON）逐个添加字段：`source`=`notify`、`sender`=`iPhone`、`device`=`iOS`、`content`=引用上方「剪贴板」变量
+4. 在信息/微信等 App 里复制文字 → 直接运行该快捷指令（可添加到主屏幕或分享菜单）
+
+**方式 B：全自动（适合定时/位置/状态提醒，不涉及读短信）**
+
+1. 快捷指令 → **自动化 → 新建个人自动化**，触发器选「特定时间」「到达某地」「专注模式开启」等
+2. 动作同方式 A 第 2–3 步，把「获取剪贴板」换成固定的 **文本** 动作写死内容
+3. 关闭「运行前询问」→ 到点自动推送，网页秒收
+
+## Linux：curl + cron / systemd
+
+**第一步：创建推送脚本**
 
 ```bash
+sudo tee /usr/local/bin/push-note.sh > /dev/null <<'EOF'
 #!/usr/bin/env bash
 # 用法：push-note.sh "通知内容"
 curl -s "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" \
   -H "Content-Type: application/json" \
   -d "{\"source\":\"notify\",\"sender\":\"$(hostname)\",\"content\":\"$1\",\"device\":\"Linux 服务器\"}"
+EOF
+sudo chmod +x /usr/local/bin/push-note.sh
 ```
 
-启用与定时示例（磁盘超 90% 自动告警）：
+**第二步：手动测试**
 
 ```bash
-chmod +x /usr/local/bin/push-note.sh
 /usr/local/bin/push-note.sh "手动测试"
-
-# crontab -e 加入：
-*/5 * * * * use=$(df / | awk 'NR==2{gsub("%","",$5);print $5}'); [ "$use" -ge 90 ] && /usr/local/bin/push-note.sh "根目录使用率 ${use}%"
+# 返回 {"success":true,...} 即通；网页「来源」下拉选 notify 可见
 ```
 
-用 systemd 系统化管理的场景，把上面的命令写进 `ExecStart` 的 service + timer 同样适用。
+**第三步：挂定时（二选一）**
+
+cron 方式（简单任务首选）：
+
+```bash
+crontab -e   # 首次会让你选编辑器，选 1 (nano) 即可
+# 加入（每 5 分钟检查磁盘，超 90% 推送告警）：
+*/5 * * * * use=$(df / | awk 'NR==2{gsub("%","",$5);print $5}'); [ "$use" -ge 90 ] && /usr/local/bin/push-note.sh "根目录使用率 ${use}%"
+# crontab -l 确认已保存
+```
+
+systemd timer 方式（需要日志与依赖管理时）：
+
+```bash
+sudo tee /etc/systemd/system/push-note.service > /dev/null <<'EOF'
+[Unit]
+Description=Push note to sms gateway
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/push-note.sh "每日巡检完成"
+EOF
+
+sudo tee /etc/systemd/system/push-note.timer > /dev/null <<'EOF'
+[Unit]
+Description=Run push-note daily
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now push-note.timer
+systemctl list-timers | grep push-note   # 确认已排期
+```
+
+排查：curl 加 `-v` 看请求详情；systemd 方式用 `journalctl -u push-note.service` 查日志。
 
 ## Windows：PowerShell + 任务计划程序
 
-脚本 `C:\scripts\push-note.ps1`：
+**第一步：创建脚本**（新建目录 `C:\scripts`，保存为 `C:\scripts\push-note.ps1`）：
 
 ```powershell
 param([string]$Text = "测试通知")
@@ -239,22 +304,81 @@ $body = @{
   content = $Text
   device  = "Windows 主机"
 } | ConvertTo-Json
-Invoke-RestMethod -Uri "https://<你的域名>/api/push" -Method Post -ContentType "application/json; charset=utf-8" -Body $body
+try {
+  Invoke-RestMethod -Uri "https://<你的域名>/api/push" -Method Post -ContentType "application/json; charset=utf-8" -Body $body
+} catch {
+  Write-Host "推送失败: $_"
+}
 ```
 
-- 手动测试：`powershell -ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 "备份完成"`
-- 定时推送：**任务计划程序 → 创建基本任务**，操作填 `powershell -ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 "每日备份已完成"`
+**第二步：手动测试**（`-ExecutionPolicy Bypass` 仅对本次进程生效，不改动系统策略）：
 
-## macOS：快捷指令或 launchd/cron
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 "备份完成"
+```
 
-- 快捷指令：与 iOS 做法完全相同
-- 脚本定时：新建 `~/push-note.sh`（内容同 Linux 脚本，`device` 改成 `macOS`），再挂 cron：
+**第三步：任务计划程序挂定时**（`Win+R` 输入 `taskschd.msc` 回车）：
+
+1. 右侧点 **创建任务**（不是「基本任务」，选项更全）
+2. **常规**：名称填「每日推送」；笔记本按需取消「只有在计算机使用交流电源时才启动此任务」
+3. **触发器** → 新建 → 每天 `09:00:00` → 确定
+4. **操作** → 新建 → 程序或脚本填 `powershell.exe`，添加参数填
+   `-ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 "每日备份已完成"` → 确定
+5. **条件/设置**：保持默认即可 → 确定
+6. 验证：任务列表里右键该任务 → **运行**，网页应出现一条通知
+
+命令行一步创建（替代上面点选）：
+
+```powershell
+schtasks /Create /TN "每日推送" /SC DAILY /ST 09:00 /TR "powershell -ExecutionPolicy Bypass -File C:\scripts\push-note.ps1 '每日备份已完成'"
+```
+
+## macOS：快捷指令或 launchd / cron
+
+**快捷指令**：与 iOS 做法完全相同（方式 A 手动转发 / 方式 B 自动化），`device` 可填 `macOS`。
+
+**脚本定时**：
 
 ```bash
+# 创建脚本（同 Linux，sender 取电脑名，device 改成 macOS）
+cat > ~/push-note.sh > /dev/null <<'EOF'
+#!/usr/bin/env bash
+curl -s "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"source\":\"notify\",\"sender\":\"$(scutil --get ComputerName)\",\"content\":\"$1\",\"device\":\"macOS\"}"
+EOF
 chmod +x ~/push-note.sh
-# crontab -e 加入（每天 9 点推送）：
-0 9 * * * /Users/你的用户名/push-note.sh "早晨日报"
+~/push-note.sh "手动测试"
 ```
+
+launchd 方式（macOS 官方定时机制，重启后自动生效）：
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+cat > ~/Library/LaunchAgents/cbm.pushnote.plist > /dev/null <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>cbm.pushnote</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/你的用户名/push-note.sh</string>
+    <string>早晨日报</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+</dict>
+</plist>
+EOF
+launchctl load ~/Library/LaunchAgents/cbm.pushnote.plist   # 卸载用 launchctl unload
+launchctl list | grep pushnote   # 确认已加载
+```
+
+> plist 里的脚本路径必须写绝对路径，把 `你的用户名` 换成实际用户名。
+
+cron 方式（macOS 仍支持）：`crontab -e` 加入 `0 9 * * * /Users/你的用户名/push-note.sh "早晨日报"`。
 
 > 进阶：已使用 [Apprise](https://github.com/caronc/apprise)、ntfy 等通知聚合工具的设备，可在其自定义 JSON Webhook / 脚本输出里对接本接口，无需逐台改脚本。
 
