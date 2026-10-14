@@ -1,5 +1,5 @@
 -- SMS Gateway D1 schema
--- 设备表：device(设备名) + sim(卡槽) 唯一，alias 为用户自定义别名
+-- 设备表：device 列存 App 模板 name 字段（自定义设备名），device+sim 唯一；alias 为可选别名
 CREATE TABLE IF NOT EXISTS devices (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   device     TEXT    NOT NULL DEFAULT 'unknown',

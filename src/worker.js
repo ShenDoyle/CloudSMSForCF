@@ -1,7 +1,8 @@
 /**
  * SMS Gateway (CloudSMSForCF) — Cloudflare Worker
  * 接收 SmsForwarder(短信转发器) Webhook 推送的短信，存入 D1，提供 JSON API 与 Web 管理页。
- * 收件号（网页标签展示值）由 App 消息模板的 sim 字段直接提供，推荐填手机号。
+ * 设备标签（网页标签展示值）由 App 消息模板的 name 字段提供（自定义名称）；sim 填收件手机号，
+ * 在卡片右下角展示，双击可复制。
  *
  * 除短信外，任何平台（Linux/Windows/macOS/iOS/安卓等）均可通过通用推送接口
  * POST /api/push 提交通知类消息，与短信一起在管理页按「来源」筛选查看。
@@ -10,6 +11,8 @@
  *   RETENTION_DAYS   — 数据保留天数，默认 30（每天 UTC 17:00 定时清理）
  *   ENABLE_AUTH      — 管理页登录开关："true" 需密码登录，"false" 免登录（默认）
  *   FEISHU_WEBHOOK   — 飞书机器人 Webhook（可选）：绑定后收到新消息自动转发到飞书群
+ *   SITE_NAME        — 网站名（可选）：管理页标题/页头，默认「短信网关」
+ *   SITE_ICON        — 网站图标 URL（可选）：默认 jsdelivr favicon；设置了但加载失败自动回退默认
  *   （Secret）RECEIVE_TOKEN   — 推送鉴权（/api/receive 与 /api/push 共用）
  *   （Secret）ADMIN_PASSWORD  — 登录密码（仅 ENABLE_AUTH="true" 时需要）
  */
@@ -23,8 +26,37 @@ const CORS = {
 
 const DEFAULT_RETENTION_DAYS = 30;
 
-/* 收件号（网页标签展示值）完全由 App 消息模板的 sim 字段提供，推荐直接填手机号。
-   未渲染的 {{变量}} 字面量在接收时被置空，不产生脏标签。 */
+/* 站名与图标：可用变量 SITE_NAME / SITE_ICON 覆盖；图标设置了但加载失败时前端自动回退默认 */
+const DEFAULT_SITE_NAME = "短信网关";
+const DEFAULT_SITE_ICON = "https://cdn.jsdelivr.net/gh/ShenDoyle/ShenDoyle.github.io@main/img/site/favicon.ico";
+
+function siteName(env) {
+  return (String(env.SITE_NAME || "").trim() || DEFAULT_SITE_NAME).slice(0, 40);
+}
+function siteIcon(env) {
+  const v = String(env.SITE_ICON || "").trim();
+  return /^https?:\/\/\S+$/i.test(v) ? v : DEFAULT_SITE_ICON;
+}
+function escAttr(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+/* 注入 JS 字符串字面量：JSON 转义并把 < 转 unicode，防止值里出现 </script> 提前闭合 */
+function jsStr(s) {
+  return JSON.stringify(s).replace(/</g, "\\u003c");
+}
+/* 把页面模板中的占位标记替换为实际配置值（用函数替换器，避免值里含 $& 等特殊序列被误解释） */
+function renderHtml(html, env) {
+  return html
+    .replace(/__SITE_NAME__/g, function () { return escAttr(siteName(env)); })
+    .replace(/__SITE_NAME_JSON__/g, function () { return jsStr(siteName(env)); })
+    .replace(/__SITE_ICON__/g, function () { return escAttr(siteIcon(env)); })
+    .replace(/__DEFAULT_ICON_JSON__/g, function () { return jsStr(DEFAULT_SITE_ICON); });
+}
+
+/* 设备标签（网页标签展示值）由 App 消息模板的 name 字段提供，自定义命名；
+   sim 填收件手机号，展示在卡片右下角（双击复制）。未渲染的 {{变量}} 字面量在接收时被置空。 */
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -126,7 +158,7 @@ async function parseIncoming(request, url) {
     try { raw = JSON.parse(text); } catch { raw = { content: text }; }
   }
   // query 参数兜底（SmsForwarder GET 转发场景）
-  for (const k of ["token", "device", "sim", "from", "content", "time"]) {
+  for (const k of ["token", "name", "device", "sim", "from", "content", "time"]) {
     if (raw[k] === undefined && url.searchParams.get(k) !== null) {
       raw[k] = url.searchParams.get(k);
     }
@@ -140,7 +172,7 @@ async function parseIncoming(request, url) {
   };
   return {
     token: pick("token", "access_token", "key"),
-    device: pick("device", "device_name", "设备信息", "sim_info"),
+    name: pick("name", "device", "device_name", "设备名", "设备信息", "sim_info"),
     sim: pick("sim", "sim_slot", "卡槽信息", "card"),
     from: pick("from", "sender", "phone", "发送号码", "mobile", "address"),
     content: pick("content", "text", "body", "短信内容", "message", "msg"),
@@ -203,15 +235,15 @@ async function handleReceive(request, env, url, ctx) {
   }
   if (!data.content) return json({ success: false, error: "empty content" }, 400);
 
-  // App 变量未渲染时值为 {{XXX}} 字面量：置空避免产生脏标签（收件号请在 App 模板中直接填手机号）
-  if (String(data.device).indexOf("{{") !== -1) data.device = "";
+  // App 变量未渲染时值为 {{XXX}} 字面量：置空避免产生脏标签（标签名请在 App 模板中直接填自定义名称）
+  if (String(data.name).indexOf("{{") !== -1) data.name = "";
   if (String(data.sim).indexOf("{{") !== -1) data.sim = "";
 
-  // 设备注册/复用：device + sim 唯一
+  // 设备注册/复用：name + sim 唯一（devices.device 列存 App 模板的 name 字段；改 name 会生成新标签）
   const dev = await env.DB.prepare(
     "INSERT INTO devices(device, sim) VALUES(?1, ?2) " +
     "ON CONFLICT(device, sim) DO UPDATE SET device = excluded.device RETURNING id"
-  ).bind(data.device, data.sim).first();
+  ).bind(data.name, data.sim).first();
   if (!dev || dev.id === undefined) return json({ success: false, error: "device upsert failed" }, 500);
 
   // 去重：同设备+发件人+内容+秒级时间 视为重复（SmsForwarder 重试场景）；重复不重复转发
@@ -234,10 +266,10 @@ async function handleReceive(request, env, url, ctx) {
 }
 
 /* ---------------- 通用推送（多平台接入）：POST /api/push ----------------
- * body(JSON): { token, source, sender/title, content, time, device }
+ * body(JSON): { token, source, sender/title, content, time, name }
  *   source — 来源标识，默认 "notify"（管理页来源筛选用，如 notify/sms/自定义）
  *   sender — 来源标题（如主机名、App 名、脚本名），可空
- *   device — 设备标签名（与短信标签并列展示），默认「通知网关」
+ *   name   — 设备标签名（与短信标签并列展示），默认「通知网关」；兼容旧字段 device
  */
 async function handlePush(request, env, url, ctx) {
   let body;
@@ -253,7 +285,7 @@ async function handlePush(request, env, url, ctx) {
 
   const source = (String(body.source || "notify").trim() || "notify").slice(0, 20);
   const sender = String(body.sender || body.title || body.from || "").trim().slice(0, 100);
-  const deviceName = (String(body.device || "通知网关").trim() || "通知网关").slice(0, 50);
+  const deviceName = (String(body.name || body.device || "通知网关").trim() || "通知网关").slice(0, 50);
 
   const dev = await env.DB.prepare(
     "INSERT INTO devices(device, sim) VALUES(?1, '') " +
@@ -344,9 +376,9 @@ async function handleListDevices(env) {
      GROUP BY d.id
      ORDER BY last_at DESC`
   ).all();
-  // 无别名时显示收件号（sim 字段值，即 App 消息模板中设置的号码），sim 为空回退设备名
+  // 标签显示优先级：别名 > 设备名（App 模板 name 字段，自定义） > 收件号（sim） > 未命名设备
   const rows = (list.results || []).map(function (r) {
-    if (!r.alias) r.display_name = r.sim || r.device || "未命名设备";
+    if (!r.alias) r.display_name = r.device || r.sim || "未命名设备";
     return r;
   });
   return json({ success: true, list: rows });
@@ -398,8 +430,8 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="https://cdn.jsdelivr.net/gh/ShenDoyle/ShenDoyle.github.io@main/img/site/favicon.ico">
-<title>短信网关</title>
+<link rel="icon" href="__SITE_ICON__">
+<title>__SITE_NAME__</title>
 <style>
   :root {
     --bg: #f5f6f7; --card: #fff; --text: #20242a; --muted: #6b7280; --faint: #9aa3ab;
@@ -444,7 +476,6 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
           animation: slidein .25s ease-out; }
   @keyframes slidein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--row-border); }
-  .recv { font-weight: 800; font-size: 16px; }
   .sender { font-weight: 700; font-size: 16px; color: var(--sender); }
   .del { margin-left: auto; border: none; background: none; color: var(--del); cursor: pointer; font-size: 12px; padding: 2px 4px; }
   .del:hover { color: var(--del-hover); }
@@ -461,6 +492,9 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   .content { word-break: break-word; white-space: pre-wrap; }
   .content a { color: var(--link); word-break: break-all; }
   .time-line { color: var(--faint); font-size: 12px; cursor: default; }
+  .foot-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .recv { flex: none; font-weight: 600; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .recv:hover { color: var(--text); }
   .empty { text-align: center; color: var(--faint); padding: 40px 0; }
   .pager { display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 16px; }
   .pager button { padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px;
@@ -487,7 +521,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   <svg viewBox="0 0 16 16" width="26" height="26" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
 </a>
 <div class="wrap">
-  <h1>短信网关</h1>
+  <h1>__SITE_NAME__</h1>
   <div class="tabs" id="tabs"></div>
   <div class="toolbar">
     <input type="search" id="q" placeholder="搜索发件人或内容…">
@@ -512,6 +546,16 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
 <footer class="foot">© 2026 <a href="https://cbm.im/" target="_blank" rel="noopener noreferrer">左立方</a> · <a href="https://github.com/ShenDoyle/CloudSMSForCF" target="_blank" rel="noopener noreferrer">CloudSMSForCF</a></footer>
 <script>
 (function () {
+  var SITE_NAME = __SITE_NAME_JSON__;
+  /* 图标回退：SITE_ICON 设置了但加载失败时，自动换回默认图标 */
+  (function () {
+    var l = document.querySelector('link[rel="icon"]'); if (!l) return;
+    var def = __DEFAULT_ICON_JSON__;
+    if (!def || l.getAttribute("href") === def) return;
+    var img = new Image();
+    img.onerror = function () { l.href = def; };
+    img.src = l.getAttribute("href");
+  })();
   var state = {
     device: 0, src: "", q: "", page: 1, pages: 1, total: 0, lastId: 0, deb: null,
     inited: false, unread: 0,
@@ -637,7 +681,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
     }
     if (document.hidden) {
       state.unread += fresh.length;
-      document.title = "(" + state.unread + ") 短信网关";
+      document.title = "(" + state.unread + ") " + SITE_NAME;
       if (state.notify && window.Notification && Notification.permission === "granted") {
         var body = (code ? "验证码 " + code + "  " : "") + String(latest.content || "");
         try {
@@ -723,17 +767,19 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
           if (day !== lastDay) { html += '<div class="daysep">' + esc(day) + '</div>'; lastDay = day; }
           var code = extractCode(m.content);
           var isSms = (m.source || "sms") === "sms";
-          var recv = m.sim_number || m.sim || "未知收件号";
+          var recv = m.sim_number || m.sim || "";
           html += '<div class="card">' +
             '<div class="row1">' +
               (isSms
-                ? '<span class="recv">【' + esc(recv) + '】</span><span class="sender">' + esc(m.sender || "未知号码") + '</span>'
+                ? '<span class="sender">' + esc(m.sender || "未知号码") + '</span>'
                 : '<span class="srctag">' + esc(m.source || "通知") + '</span><span class="sender">' + esc(m.sender || m.device_name || "通知") + '</span>') +
               '<button class="del" data-id="' + m.id + '">删除</button>' +
             '</div>' +
             (code ? '<div class="code-line">验证码：<b>' + esc(code) + '</b><button class="copy" data-code="' + esc(code) + '">复制</button></div>' : '') +
             '<div class="line"><span class="content">' + linkify(esc(m.content)) + '</span></div>' +
-            '<div class="line time-line" title="' + esc(fmtTime(m.received_at)) + '">' + esc(relTime(m.received_at)) + '</div>' +
+            '<div class="line foot-line"><span class="time-line" title="' + esc(fmtTime(m.received_at)) + '">' + esc(relTime(m.received_at)) + '</span>' +
+              (isSms && recv ? '<span class="recv" title="双击复制收件号">' + esc(recv) + '</span>' : '') +
+            '</div>' +
           '</div>';
         });
         $("list").innerHTML = html;
@@ -782,7 +828,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   };
   /* 回到页面即清零未读数、恢复标题 */
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) { state.unread = 0; document.title = "短信网关"; }
+    if (!document.hidden) { state.unread = 0; document.title = SITE_NAME; }
   });
   $("list").addEventListener("click", function (ev) {
     var copyBtn = ev.target.closest ? ev.target.closest(".copy") : null;
@@ -792,6 +838,16 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
     var id = btn.getAttribute("data-id");
     if (!confirm("确认删除这条短信？")) return;
     fetch("/api/messages/" + id, { method: "DELETE" }).then(load);
+  });
+  /* 双击收件号直接复制 */
+  $("list").addEventListener("dblclick", function (ev) {
+    var el = ev.target.closest ? ev.target.closest(".recv") : null;
+    if (!el) return;
+    var text = el.textContent;
+    var fin = function () { toast("收件号已复制"); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(fin, function () { fallbackCopy(text); fin(); });
+    } else { fallbackCopy(text); fin(); }
   });
   refreshAll();
 })();
@@ -805,8 +861,8 @@ const LOGIN_HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="https://cdn.jsdelivr.net/gh/ShenDoyle/ShenDoyle.github.io@main/img/site/favicon.ico">
-<title>短信网关 - 登录</title>
+<link rel="icon" href="__SITE_ICON__">
+<title>__SITE_NAME__ - 登录</title>
 <style>
   :root { --bg: #f5f6f7; --card: #fff; --text: #20242a; --border: #e3e6e9; --input-border: #d8dce0; }
   @media (prefers-color-scheme: dark) {
@@ -831,7 +887,7 @@ const LOGIN_HTML = String.raw`<!DOCTYPE html>
 </head>
 <body>
 <div class="box">
-  <h1>短信网关</h1>
+  <h1>__SITE_NAME__</h1>
   <input type="password" id="pw" placeholder="管理密码" autofocus>
   <button id="go">登 录</button>
   <div class="err" id="err"></div>
@@ -839,6 +895,15 @@ const LOGIN_HTML = String.raw`<!DOCTYPE html>
 </div>
 <script>
 (function () {
+  /* 图标回退：SITE_ICON 设置了但加载失败时，自动换回默认图标 */
+  (function () {
+    var l = document.querySelector('link[rel="icon"]'); if (!l) return;
+    var def = __DEFAULT_ICON_JSON__;
+    if (!def || l.getAttribute("href") === def) return;
+    var img = new Image();
+    img.onerror = function () { l.href = def; };
+    img.src = l.getAttribute("href");
+  })();
   var pw = document.getElementById("pw");
   var err = document.getElementById("err");
   function tryLogin() {
@@ -883,7 +948,7 @@ export default {
       const isPublicApi = path === "/api/receive" || path === "/api/push" || path === "/api/login" || path === "/api/logout";
       if (!isPublicApi && !(await isAuthed(request, env))) {
         if (isPage && request.method === "GET") {
-          return new Response(LOGIN_HTML, {
+          return new Response(renderHtml(LOGIN_HTML, env), {
             headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
           });
         }
@@ -923,7 +988,7 @@ export default {
         return await handleSetAlias(request, env);
       }
       if ((path === "/" || path === "/index.html") && request.method === "GET") {
-        return new Response(PAGE_HTML, {
+        return new Response(renderHtml(PAGE_HTML, env), {
           headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
         });
       }

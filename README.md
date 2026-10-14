@@ -13,11 +13,12 @@
 
 - **实时接收**：手机短信 → Webhook → Worker → D1，秒级入库；网页长轮询自动刷新，无需手动操作
 - **网页展示**：
-  - 首行【收件手机号】+ 来源号码
+  - 首行显示发件号码；收件手机号在卡片右下角，双击即复制
   - 自动识别验证码：单独一行 + 一键复制按钮（无验证码不显示该行）
   - 短信内容中的网址自动转为可点击链接
   - 中文格式发送时间
-- **收件号标签**：标签显示什么由手机 App 消息模板的 `sim` 字段决定（推荐直接填手机号），顶部标签筛选；无短信的标签可点 × 删除
+- **设备标签**：标签显示 App 消息模板 `name` 字段的值（自定义命名，如「我的手机」），顶部标签筛选；无短信的标签可点 × 删除
+- **站名与图标可配**：`SITE_NAME` / `SITE_ICON` 两个变量自定义网站名和浏览器标签图标（可选）
 - **可选登录**：一个开关决定管理页是否需要密码登录（见下文配置项）
 - **保留天数可调**：默认 30 天，改个数字即可（见下文配置项）
 - **多平台接入**：不止短信——Linux/Windows/macOS/iOS/安卓的通知都能经通用接口 `/api/push` 推进来，网页按「来源」筛选
@@ -29,6 +30,8 @@
 |---|---|---|---|
 | `RETENTION_DAYS` | 变量 | `30` | 数据保留天数，定时任务每天清理超过该天数的短信 |
 | `ENABLE_AUTH` | 变量 | `"false"` | `"true"` = 管理页需要登录；`"false"` = 免登录直接看 |
+| `SITE_NAME` | 变量 | `短信网关` | 网站名（可选）：管理页标题与页头，留空用默认 |
+| `SITE_ICON` | 变量 | 内置图标 | 网站图标 URL（可选，须 `http(s)://` 开头）；设置了但加载失败自动回退内置图标 |
 | `ADMIN_PASSWORD` | Secret | 无 | 登录密码，仅 `ENABLE_AUTH="true"` 时需要 |
 | `RECEIVE_TOKEN` | Secret | 无 | 手机推送鉴权密钥（必须设置，否则推送被拒绝） |
 | `DB` | D1 绑定 | — | D1 数据库绑定，变量名必须是 `DB` |
@@ -70,6 +73,8 @@
 1. **添加变量**（类型选「文本」）：
    - 名称 `RETENTION_DAYS`，值 `30`（想保留 90 天就填 `90`）
    - 名称 `ENABLE_AUTH`，值 `false`（要登录就填 `true`）
+   - 名称 `SITE_NAME`（可选），值自定义网站名，如 `我的短信站`
+   - 名称 `SITE_ICON`（可选），值图标 URL（`http(s)://` 开头）；不填或 URL 失效自动用内置图标
 2. **添加密钥**（类型选「密钥/Secret」）：
    - 名称 `RECEIVE_TOKEN`，值自己编一个足够长的随机字符串（不要使用任何教程示例值，越长越好）
    - 名称 `ADMIN_PASSWORD`，值自己编一个管理页登录密码（仅当 `ENABLE_AUTH="true"` 时才需要）
@@ -97,7 +102,7 @@
 浏览器打开管理页应看到「短信网关」页面（若开了登录则先见登录页）。再验证接收接口（把 `<域名>` 和 `<密钥>` 换成你的）：
 
 ```
-curl "https://<域名>/api/receive?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"device\":\"test\",\"sim\":\"13800138000\",\"from\":\"10086\",\"content\":\"部署测试\"}"
+curl "https://<域名>/api/receive?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"name\":\"test\",\"sim\":\"13800138000\",\"from\":\"10086\",\"content\":\"部署测试\"}"
 ```
 
 返回 `{"success":true,...}` 即通。这条测试短信可在网页上删除。
@@ -134,7 +139,7 @@ wrangler deploy
 | `content` | 是 | 通知正文（别名 `message` / `text` / `msg` 均可） |
 | `source` | 否 | 来源标识，默认 `notify`；网页顶部「来源」下拉按它筛选，可自定义（如 `cron`、`nas`、`monitor`） |
 | `sender` | 否 | 来源标题，显示在卡片首行（如主机名、App 名、脚本名） |
-| `device` | 否 | 标签名，默认「通知网关」；多台设备用不同名字便于筛选 |
+| `name` | 否 | 标签名，默认「通知网关」；多台设备用不同名字便于筛选（兼容旧字段 `device`） |
 | `time` | 否 | 秒/毫秒时间戳或文本时间；留空按服务器接收时间 |
 
 所有平台通用的最小示例：
@@ -155,28 +160,27 @@ curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: a
 2. **发送通道 → 新建发送通道 → Webhook 通道**：
    - 请求方式：`POST`
    - URL：`https://<你的域名>/api/receive?token=<你的RECEIVE_TOKEN>`
-   - 消息模板——**网页上的「收件号标签」显示的就是 `sim` 字段的值，直接填手机号最直观**（改成你自己的号码）：
+   - 消息模板——**标签名由 `name` 字段决定（自定义命名），收件号填在 `sim`（直接写手机号）**：
 
      ```json
-     {"device":"{{DEVICE_NAME}}","sim":"13800138000","from":"{{FROM}}","content":"{{SMS}}","time":"{{DATE}}"}
+     {"name":"我的手机","sim":"13800138000","from":"{{FROM}}","content":"{{SMS}}","time":"{{DATE}}"}
      ```
 
    **模板变量说明**：
 
    | 变量 | 含义 | 用法建议 |
    |---|---|---|
+   | `name` | 标签名 | 直接写死自定义名（如「我的手机」），网页顶部标签显示它 |
+   | `sim` | 收件号 | 直接写死手机号；显示在卡片右下角，双击可复制 |
    | `{{SMS}}` | 短信正文 | ⚠️ `content` 必须用它，用别的变量或留空会导致内容混入号码/卡槽/时间等噪音 |
    | `{{FROM}}` | 发件人号码 | 配合 `from` 字段 |
-   | `{{DEVICE_NAME}}` | 设备名 | 多台手机时用于区分；单台可留空或不传 |
-   | `{{SIM_SLOT}}` | 卡槽代号 | 渲染结果形如 `SIM1_`，**不是手机号**，不建议用作收件号标签 |
    | `{{DATE}}` | 接收时间 | 配合 `time` 字段，留空则按服务器接收时间 |
 
-   **收件号（sim 字段）怎么填**：
-   - **单机单卡（最常见）**：直接写死手机号，如上面模板所示 → 网页标签显示 `13800138000`
-   - **多台手机**：每台手机各自 App 的模板里写各自的号码
+   **要点**：
+   - **单机单卡（最常见）**：`name` 填设备昵称、`sim` 写死手机号即可
+   - **多台手机**：每台各自 App 模板的 `name` 填不同昵称、`sim` 写各自号码
    - **同一台手机双卡需区分**：新建两条 Webhook 通道 + 两条转发规则（SIM 卡 1 的规则选通道 A 且模板 `sim` 填卡 1 号码；卡 2 的规则选通道 B 填卡 2 号码）
-   - `sim` 留空 → 标签回退显示设备名
-   - 若模板里写了 `{{SIM_SLOT}}` 这类变量但 App 没渲染（推过来是 `{{XXX}}` 字面量），Worker 会自动置空，不会产生脏标签
+   - 若误写了 App 未渲染的变量（推过来是 `{{XXX}}` 字面量），Worker 会自动置空，不会产生脏标签
 
 3. （可选备份通道）**发送通道 → 新建飞书机器人通道**，填群机器人的 Webhook 地址
 4. **转发规则 → 新建规则**：消息类型勾「短信」，处理操作选「个人版」→ 同时勾选上面两个通道，启用
@@ -192,7 +196,7 @@ curl "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: a
    - 消息模板：
 
      ```json
-     {"source":"notify","sender":"{{APP_NAME}}","content":"{{TITLE}}：{{MSG}}","device":"安卓手机"}
+     {"source":"notify","sender":"{{APP_NAME}}","content":"{{TITLE}}：{{MSG}}","name":"安卓手机"}
      ```
 
    通知类模板变量：
@@ -223,7 +227,7 @@ iOS 出于隐私限制，快捷指令**无法自动读取短信正文**，按用
    - URL：`https://<你的域名>/api/push?token=<RECEIVE_TOKEN>`
    - 方法：`POST`
    - 请求头：`Content-Type` = `application/json`
-   - 请求体（JSON）逐个添加字段：`source`=`notify`、`sender`=`iPhone`、`device`=`iOS`、`content`=引用上方「剪贴板」变量
+   - 请求体（JSON）逐个添加字段：`source`=`notify`、`sender`=`iPhone`、`name`=`iOS`、`content`=引用上方「剪贴板」变量
 4. 在信息/微信等 App 里复制文字 → 直接运行该快捷指令（可添加到主屏幕或分享菜单）
 
 **方式 B：全自动（适合定时/位置/状态提醒，不涉及读短信）**
@@ -242,7 +246,7 @@ sudo tee /usr/local/bin/push-note.sh > /dev/null <<'EOF'
 # 用法：push-note.sh "通知内容"
 curl -s "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d "{\"source\":\"notify\",\"sender\":\"$(hostname)\",\"content\":\"$1\",\"device\":\"Linux 服务器\"}"
+  -d "{\"source\":\"notify\",\"sender\":\"$(hostname)\",\"content\":\"$1\",\"name\":\"Linux 服务器\"}"
 EOF
 sudo chmod +x /usr/local/bin/push-note.sh
 ```
@@ -307,7 +311,7 @@ $body = @{
   source  = "notify"
   sender  = $env:COMPUTERNAME
   content = $Text
-  device  = "Windows 主机"
+  name    = "Windows 主机"
 } | ConvertTo-Json
 try {
   Invoke-RestMethod -Uri "https://<你的域名>/api/push" -Method Post -ContentType "application/json; charset=utf-8" -Body $body
@@ -340,17 +344,17 @@ schtasks /Create /TN "每日推送" /SC DAILY /ST 09:00 /TR "powershell -Executi
 
 ## macOS：快捷指令或 launchd / cron
 
-**快捷指令**：与 iOS 做法完全相同（方式 A 手动转发 / 方式 B 自动化），`device` 可填 `macOS`。
+**快捷指令**：与 iOS 做法完全相同（方式 A 手动转发 / 方式 B 自动化），`name` 可填 `macOS`。
 
 **脚本定时**：
 
 ```bash
-# 创建脚本（同 Linux，sender 取电脑名，device 改成 macOS）
+# 创建脚本（同 Linux，sender 取电脑名，name 改成 macOS）
 cat > ~/push-note.sh > /dev/null <<'EOF'
 #!/usr/bin/env bash
 curl -s "https://<你的域名>/api/push?token=<RECEIVE_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d "{\"source\":\"notify\",\"sender\":\"$(scutil --get ComputerName)\",\"content\":\"$1\",\"device\":\"macOS\"}"
+  -d "{\"source\":\"notify\",\"sender\":\"$(scutil --get ComputerName)\",\"content\":\"$1\",\"name\":\"macOS\"}"
 EOF
 chmod +x ~/push-note.sh
 ~/push-note.sh "手动测试"
@@ -406,15 +410,15 @@ cron 方式（macOS 仍支持）：`crontab -e` 加入 `0 9 * * * /Users/你的�
 
 注意：手机推送接口 `/api/receive` 不受此开关影响，始终靠 `RECEIVE_TOKEN` 鉴权。
 
-# 收件号标签
+# 设备标签与收件号显示
 
-网页顶部筛选标签和短信卡片首行【收件号】显示的都是入库 `sim` 字段的值，完全由 App 消息模板决定，服务端不做任何映射：
+网页顶部筛选标签显示 App 消息模板 `name` 字段的值（通知链路取推送的 `name`，默认「通知网关」），收件手机号显示在短信卡片右下角（`sim` 字段值），双击即复制。服务端不做任何号码映射：
 
-- 模板 `sim` 直接填手机号 → 标签显示手机号（推荐）
-- `sim` 留空 → 标签回退显示设备名（`device` 字段）
-- 变量未渲染（`{{XXX}}` 字面量）→ Worker 自动置空，按留空处理
+- 标签名随时可改：App 模板里改 `name` 即生效；改了名字会生成一个新标签，旧标签等短信清零后点 × 删除即可
+- `name` 为空 → 标签回退显示 `sim`（手机号），再为空则显示「未命名设备」
+- 也可以给标签起别名：`POST /api/devices/<id>/alias`，body `{"alias":"主号"}`，设置了别名则标签优先显示别名
 
-改收件号显示 = 改手机 App 里的消息模板，重新发一条短信即生效。
+改标签显示 = 改手机 App 里的消息模板（`name` 字段）或推送请求里的 `name`，重新发一条消息即生效。
 
 # API 一览
 
