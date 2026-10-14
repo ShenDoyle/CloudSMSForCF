@@ -3,10 +3,14 @@
  * 接收 SmsForwarder(短信转发器) Webhook 推送的短信，存入 D1，提供 JSON API 与 Web 管理页。
  * 收件号（网页标签展示值）由 App 消息模板的 sim 字段直接提供，推荐填手机号。
  *
+ * 除短信外，任何平台（Linux/Windows/macOS/iOS/安卓等）均可通过通用推送接口
+ * POST /api/push 提交通知类消息，与短信一起在管理页按「来源」筛选查看。
+ *
  * 可配置项（部署时在 Variables / wrangler.toml [vars] 设置）：
- *   RETENTION_DAYS — 数据保留天数，默认 30（每天 UTC 17:00 定时清理）
- *   ENABLE_AUTH    — 管理页登录开关："true" 需密码登录，"false" 免登录（默认）
- *   （Secret）RECEIVE_TOKEN   — 手机推送鉴权
+ *   RETENTION_DAYS   — 数据保留天数，默认 30（每天 UTC 17:00 定时清理）
+ *   ENABLE_AUTH      — 管理页登录开关："true" 需密码登录，"false" 免登录（默认）
+ *   FEISHU_WEBHOOK   — 飞书机器人 Webhook（可选）：绑定后收到新消息自动转发到飞书群
+ *   （Secret）RECEIVE_TOKEN   — 推送鉴权（/api/receive 与 /api/push 共用）
  *   （Secret）ADMIN_PASSWORD  — 登录密码（仅 ENABLE_AUTH="true" 时需要）
  */
 
@@ -159,9 +163,36 @@ function normalizeTime(t) {
   return isNaN(d.getTime()) ? nowUTC() : toStr(d);
 }
 
-/* ---------------- 接收 ---------------- */
+/* ---------------- 飞书机器人转发（可选，绑定 FEISHU_WEBHOOK 后自动启用） ---------------- */
 
-async function handleReceive(request, env, url) {
+/* UTC 时间串 → 北京时间串（用于飞书消息展示） */
+function bjTime(utcStr) {
+  const d = new Date(String(utcStr || "").replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return String(utcStr || "");
+  return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().replace("T", " ").slice(0, 19) + "（北京时间）";
+}
+
+/* 转发一条消息到飞书群；未配置 Webhook 或发送失败均不影响主流程 */
+async function forwardFeishu(env, head, content, timeStr) {
+  const hook = env.FEISHU_WEBHOOK;
+  if (!hook) return;
+  try {
+    await fetch(hook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        msg_type: "text",
+        content: { text: head + "\n" + String(content || "") + (timeStr ? "\n" + timeStr : "") },
+      }),
+    });
+  } catch (e) {
+    console.error("feishu forward failed:", e && e.message);
+  }
+}
+
+/* ---------------- 接收（短信：SmsForwarder 等 App Webhook） ---------------- */
+
+async function handleReceive(request, env, url, ctx) {
   const data = await parseIncoming(request, url);
   if (!data) return json({ success: false, error: "invalid body" }, 400);
 
@@ -183,17 +214,65 @@ async function handleReceive(request, env, url) {
   ).bind(data.device, data.sim).first();
   if (!dev || dev.id === undefined) return json({ success: false, error: "device upsert failed" }, 500);
 
-  // 去重：同设备+发件人+内容+秒级时间 视为重复（SmsForwarder 重试场景）
+  // 去重：同设备+发件人+内容+秒级时间 视为重复（SmsForwarder 重试场景）；重复不重复转发
   const receivedAt = normalizeTime(data.time);
   const ins = await env.DB.prepare(
-    "INSERT OR IGNORE INTO messages(device_id, sender, content, received_at) VALUES(?1, ?2, ?3, ?4)"
+    "INSERT OR IGNORE INTO messages(device_id, sender, content, received_at, source) VALUES(?1, ?2, ?3, ?4, 'sms')"
   ).bind(dev.id, data.from, data.content, receivedAt).run();
+  const duplicated = ins.meta && ins.meta.changes === 0;
+
+  if (!duplicated) {
+    const head = "【短信】" + (data.sim || "未知收件号") + (data.from ? " ← " + data.from : "");
+    ctx.waitUntil(forwardFeishu(env, head, data.content, bjTime(receivedAt)));
+  }
 
   return json({
     success: true,
     device_id: dev.id,
-    duplicated: ins.meta && ins.meta.changes === 0,
+    duplicated,
   });
+}
+
+/* ---------------- 通用推送（多平台接入）：POST /api/push ----------------
+ * body(JSON): { token, source, sender/title, content, time, device }
+ *   source — 来源标识，默认 "notify"（管理页来源筛选用，如 notify/sms/自定义）
+ *   sender — 来源标题（如主机名、App 名、脚本名），可空
+ *   device — 设备标签名（与短信标签并列展示），默认「通知网关」
+ */
+async function handlePush(request, env, url, ctx) {
+  let body;
+  try { body = await request.json(); } catch { return json({ success: false, error: "invalid json" }, 400); }
+  if (!body || typeof body !== "object") return json({ success: false, error: "invalid body" }, 400);
+
+  const provided = url.searchParams.get("token") || body.token;
+  if (!env.RECEIVE_TOKEN || !provided || !safeEqual(provided, env.RECEIVE_TOKEN)) {
+    return json({ success: false, error: "unauthorized" }, 403);
+  }
+  const content = String(body.content || body.text || body.message || body.msg || "").trim();
+  if (!content) return json({ success: false, error: "empty content" }, 400);
+
+  const source = (String(body.source || "notify").trim() || "notify").slice(0, 20);
+  const sender = String(body.sender || body.title || body.from || "").trim().slice(0, 100);
+  const deviceName = (String(body.device || "通知网关").trim() || "通知网关").slice(0, 50);
+
+  const dev = await env.DB.prepare(
+    "INSERT INTO devices(device, sim) VALUES(?1, '') " +
+    "ON CONFLICT(device, sim) DO UPDATE SET device = excluded.device RETURNING id"
+  ).bind(deviceName).first();
+  if (!dev || dev.id === undefined) return json({ success: false, error: "device upsert failed" }, 500);
+
+  const receivedAt = normalizeTime(body.time);
+  const ins = await env.DB.prepare(
+    "INSERT OR IGNORE INTO messages(device_id, sender, content, received_at, source) VALUES(?1, ?2, ?3, ?4, ?5)"
+  ).bind(dev.id, sender, content, receivedAt, source).run();
+  const duplicated = ins.meta && ins.meta.changes === 0;
+
+  if (!duplicated) {
+    const head = "【" + source + "】" + (sender ? sender + " · " : "") + deviceName;
+    ctx.waitUntil(forwardFeishu(env, head, content, bjTime(receivedAt)));
+  }
+
+  return json({ success: true, device_id: dev.id, duplicated });
 }
 
 /* ---------------- 查询 / 管理 API ---------------- */
@@ -204,11 +283,17 @@ async function handleListMessages(url, env) {
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") || "20", 10) || 20));
 
+  const source = (url.searchParams.get("source") || "").trim();
+
   const where = [];
   const params = [];
   if (Number.isInteger(deviceId) && deviceId > 0) {
     where.push("m.device_id = ?");
     params.push(deviceId);
+  }
+  if (source) {
+    where.push("m.source = ?");
+    params.push(source);
   }
   if (q) {
     where.push("(m.content LIKE ? OR m.sender LIKE ?)");
@@ -222,7 +307,7 @@ async function handleListMessages(url, env) {
   const total = totalRow ? totalRow.n : 0;
 
   const list = await env.DB.prepare(
-    `SELECT m.id, m.sender, m.content, m.received_at, m.device_id,
+    `SELECT m.id, m.sender, m.content, m.received_at, m.device_id, m.source,
             COALESCE(NULLIF(d.alias, ''), d.device) AS device_name, d.sim, d.device
      FROM messages m JOIN devices d ON d.id = m.device_id
      ${whereSql}
@@ -345,6 +430,8 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   .toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
   .toolbar input[type=search] { flex: 1; padding: 8px 12px; border: 1px solid var(--border);
          border-radius: 8px; font-size: 14px; background: var(--card); color: var(--text); }
+  .toolbar select { padding: 8px 8px; border: 1px solid var(--border); border-radius: 8px;
+         font-size: 13px; background: var(--card); color: var(--text); }
   .opts { display: flex; gap: 16px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
   .opt { cursor: pointer; user-select: none; }
   .opt input { vertical-align: -2px; margin-right: 4px; accent-color: var(--accent); }
@@ -360,6 +447,8 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   .sender { font-weight: 700; font-size: 16px; color: var(--sender); }
   .del { margin-left: auto; border: none; background: none; color: var(--del); cursor: pointer; font-size: 12px; padding: 2px 4px; }
   .del:hover { color: var(--del-hover); }
+  .srctag { flex: none; font-size: 11px; font-weight: 700; color: var(--badge-bg); background: var(--accent);
+            border-radius: 5px; padding: 1px 7px; }
   .code-line { margin: 6px 0 2px; color: var(--code-text); }
   .code-line b { font-size: 17px; letter-spacing: 1px; margin-right: 8px;
                  font-family: ui-monospace, Consolas, monospace; background: var(--code-bg);
@@ -401,6 +490,11 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   <div class="tabs" id="tabs"></div>
   <div class="toolbar">
     <input type="search" id="q" placeholder="搜索发件人或内容…">
+    <select id="src" title="按来源筛选">
+      <option value="">全部来源</option>
+      <option value="sms">短信</option>
+      <option value="notify">通知</option>
+    </select>
   </div>
   <div class="opts">
     <label class="opt"><input type="checkbox" id="autocopy">自动复制验证码</label>
@@ -418,7 +512,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
 <script>
 (function () {
   var state = {
-    device: 0, q: "", page: 1, pages: 1, total: 0, lastId: 0, deb: null,
+    device: 0, src: "", q: "", page: 1, pages: 1, total: 0, lastId: 0, deb: null,
     inited: false, unread: 0,
     autoCopy: (function () { try { return localStorage.getItem("sms_autocopy") !== "0"; } catch (e) { return true; } })(),
     notify: (function () { try { return localStorage.getItem("sms_notify") !== "0"; } catch (e) { return true; } })()
@@ -554,6 +648,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   function qs() {
     var p = new URLSearchParams();
     if (state.device) p.set("device_id", state.device);
+    if (state.src) p.set("source", state.src);
     if (state.q) p.set("q", state.q);
     p.set("page", state.page);
     return p.toString();
@@ -620,21 +715,23 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
         $("prev").disabled = res.page <= 1;
         $("next").disabled = res.page >= res.pages;
         if (!list.length) { $("list").innerHTML = '<div class="empty">暂无短信</div>'; return; }
-        /* 按日期分组渲染：今天 / 昨天 / M月D日 分隔行 */
+        /* 按日期分组渲染：今天 / 昨天 / M月D日 分隔行；来源徽章区分短信与通知 */
         var html = "", lastDay = "";
         list.forEach(function (m) {
           var day = dayLabel(m.received_at);
           if (day !== lastDay) { html += '<div class="daysep">' + esc(day) + '</div>'; lastDay = day; }
           var code = extractCode(m.content);
+          var isSms = (m.source || "sms") === "sms";
           var recv = m.sim_number || m.sim || "未知收件号";
           html += '<div class="card">' +
             '<div class="row1">' +
-              '<span class="recv">【' + esc(recv) + '】</span>' +
-              '<span class="sender">' + esc(m.sender || "未知号码") + '</span>' +
+              (isSms
+                ? '<span class="recv">【' + esc(recv) + '】</span><span class="sender">' + esc(m.sender || "未知号码") + '</span>'
+                : '<span class="srctag">' + esc(m.source || "通知") + '</span><span class="sender">' + esc(m.sender || m.device_name || "通知") + '</span>') +
               '<button class="del" data-id="' + m.id + '">删除</button>' +
             '</div>' +
             (code ? '<div class="code-line">验证码：<b>' + esc(code) + '</b><button class="copy" data-code="' + esc(code) + '">复制</button></div>' : '') +
-            '<div class="line">短信内容：<span class="content">' + linkify(esc(m.content)) + '</span></div>' +
+            '<div class="line">' + (isSms ? "短信内容" : "通知内容") + '：<span class="content">' + linkify(esc(m.content)) + '</span></div>' +
             '<div class="line time-line" title="' + esc(fmtTime(m.received_at)) + '">' + esc(relTime(m.received_at)) + '</div>' +
           '</div>';
         });
@@ -649,6 +746,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
   });
   $("prev").onclick = function () { if (state.page > 1) { state.page--; load(); } };
   $("next").onclick = function () { if (state.page < state.pages) { state.page++; load(); } };
+  $("src").onchange = function () { state.src = $("src").value; state.page = 1; load(); };
   /* 推送式自动刷新：长轮询 /api/wait，有新消息立即加载；搜索模式下退化为 5s 轮询 */
   function pollLoop() {
     if (state.q) {
@@ -771,16 +869,16 @@ async function handleCron(env) {
 /* ---------------- 路由 ---------------- */
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
     try {
-      /* 登录开关：开启后，除接收接口与登录/登出外，页面与管理 API 均需登录 */
+      /* 登录开关：开启后，除推送接口与登录/登出外，页面与管理 API 均需登录 */
       const isPage = path === "/" || path === "/index.html";
-      const isPublicApi = path === "/api/receive" || path === "/api/login" || path === "/api/logout";
+      const isPublicApi = path === "/api/receive" || path === "/api/push" || path === "/api/login" || path === "/api/logout";
       if (!isPublicApi && !(await isAuthed(request, env))) {
         if (isPage && request.method === "GET") {
           return new Response(LOGIN_HTML, {
@@ -791,7 +889,10 @@ export default {
       }
 
       if (path === "/api/receive" && (request.method === "POST" || request.method === "GET")) {
-        return await handleReceive(request, env, url);
+        return await handleReceive(request, env, url, ctx);
+      }
+      if (path === "/api/push" && request.method === "POST") {
+        return await handlePush(request, env, url, ctx);
       }
       if (path === "/api/login" && request.method === "POST") {
         return await handleLogin(request, env);
