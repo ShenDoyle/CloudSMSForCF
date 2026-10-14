@@ -731,7 +731,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
               '<button class="del" data-id="' + m.id + '">删除</button>' +
             '</div>' +
             (code ? '<div class="code-line">验证码：<b>' + esc(code) + '</b><button class="copy" data-code="' + esc(code) + '">复制</button></div>' : '') +
-            '<div class="line">' + (isSms ? "短信内容" : "通知内容") + '：<span class="content">' + linkify(esc(m.content)) + '</span></div>' +
+            '<div class="line"><span class="content">' + linkify(esc(m.content)) + '</span></div>' +
             '<div class="line time-line" title="' + esc(fmtTime(m.received_at)) + '">' + esc(relTime(m.received_at)) + '</div>' +
           '</div>';
         });
