@@ -41,6 +41,7 @@ ENTRY_FILES = [
     "netlify/functions/cron.mjs",
     "deno/main.js",
     "edgeone/functions/[[default]].js",
+    "edgeone/functions/index.js",  # EdgeOne 根路径 / 只认 index.js，[[default]].js 不匹配 /（与 [[default]].js 逻辑同步维护）
     "node/server.mjs",
 ]
 

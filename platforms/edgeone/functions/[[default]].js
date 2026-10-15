@@ -1,13 +1,15 @@
 /**
- * SMSToWeb — 腾讯 EdgeOne Pages Functions 入口（[[default]].js 兜底捕获全部路由）
+ * SMSToWeb — 腾讯 EdgeOne Makers Functions 入口（[[default]].js 兜底捕获全部路由）
  * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
- * 直接把 edgeone/ 作为项目根目录部署即可（见 platforms/README.md「EdgeOne Pages」）。
+ * 直接把 edgeone/ 作为项目根目录部署即可（见 platforms/README.md 与 edgeone/README.md）。
  *
  * 说明：
  *  - EdgeOne Functions 提供 Web 标准 Request/Response，与核心应用零转换；
  *  - 平台暂无原生定时任务：用外部 cron（如 cron-job.org）定期
  *    GET /api/cron?token=<RECEIVE_TOKEN>；
- *  - 若你的 EdgeOne 版本对兜底路由文件名要求不同，可把本文件改名为 [[path]].js（与 CF Pages 一致）。
+ *  - 注意（2026-10 实测）：本文件兜底只匹配 /foo、/api/xxx 等非根路径，
+ *    根路径 / 由同目录 index.js 承接（EdgeOne Makers 路由规则），
+ *    两个入口文件逻辑保持一致，修改时需同步。
  */
 import { fetchApp, handleCronRequest } from "../app.js";
 import { createTursoDb } from "../db.js";

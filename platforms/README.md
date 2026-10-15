@@ -9,7 +9,7 @@ SMSToWeb 的全部六个平台（Cloudflare 主版本 + 五个移植平台）都
 | Vercel | Edge Function | 平台 cron | [vercel/README.md](vercel/README.md) |
 | Deno Deploy | Deno 原生 | `Deno.cron`（内置） | [deno/README.md](deno/README.md) |
 | Netlify | Functions v2（Node） | Scheduled Function | [netlify/README.md](netlify/README.md) |
-| EdgeOne Pages（腾讯） | Functions | 外部 cron 调 /api/cron | [edgeone/README.md](edgeone/README.md) |
+| EdgeOne Makers（腾讯） | Functions | 外部 cron 调 /api/cron | [edgeone/README.md](edgeone/README.md) |
 | Fly.io / Railway / VPS | Docker（Node 22）+ Turso/本地 SQLite | 进程内置 | [node/README.md](node/README.md) |
 
 六平台（含 Cloudflare）接口路径、鉴权逻辑、消息模型、管理页、多渠道通知转发、每日清理（UTC 17:00）完全一致，
@@ -19,7 +19,7 @@ SMSToWeb 的全部六个平台（Cloudflare 主版本 + 五个移植平台）都
 
 - **想要零成本 + 省心** → Cloudflare 主版本（D1 免费额度大，Worker 无时长问题）
 - **想体验多平台** → Deno Deploy（与 Worker 语义最接近，长轮询无截断）
-- **主要国内访问** → EdgeOne Pages（注意自定义域名需备案）
+- **主要国内访问** → EdgeOne Makers（注意自定义域名需备案）
 - **已有服务器 / 想完全自控** → node/（Docker 自托管）
 
 > 长轮询说明：管理页通过 `GET /api/wait` 挂起最长 25 秒等待新消息。在函数时长较紧的平台（Netlify 免费版、
@@ -71,7 +71,7 @@ platforms/
 ├── vercel/     # api/[[...route]].js + app.js + db.js + schema.sql + vercel.json + README.md
 ├── netlify/    # functions/{api,cron}.mjs + app.js + db.js + schema.sql + netlify.toml + README.md
 ├── deno/       # main.js + app.js + db.js + schema.sql + README.md
-├── edgeone/    # functions/[[default]].js + app.js + db.js + schema.sql + README.md
+├── edgeone/    # functions/{[[default]].js,index.js} + app.js + db.js + schema.sql + README.md
 ├── node/       # server.mjs + app.js + db.js + schema.sql + Dockerfile + package.json + README.md
 ├── shared/     # app.js / db.js 唯一源（gen_app.py 由此同步到各平台目录）
 └── gen_app.py  # 生成器：从 ../src/worker.js 生成 app.js 并同步全部平台（含 cloudflare 独立副本）

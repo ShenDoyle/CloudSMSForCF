@@ -1,15 +1,15 @@
-# 腾讯 EdgeOne Pages 部署教程
+# 腾讯 EdgeOne Makers 部署教程
 
-把 SMSToWeb 部署到腾讯 EdgeOne Pages（Functions + Turso 数据库）。国内访问体验好，全程约 15 分钟。
+把 SMSToWeb 部署到腾讯 EdgeOne Makers（原 EdgeOne Pages，Functions + Turso 数据库）。国内访问体验好，全程约 15 分钟。
 
-**本目录文件**：`functions/[[default]].js`（入口，兜底捕获全部路由）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）。
+**本目录文件**：`functions/[[default]].js`（入口，兜底捕获全部路由）、`functions/index.js`（根路径 `/` 专用入口，逻辑与兜底入口一致，两处需同步维护）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）。
 
 ---
 
 ## 准备工作
 
 1. 一个腾讯云账号（[注册入口](https://cloud.tencent.com)，需实名认证）
-2. 一个 GitHub 账号（EdgeOne Pages 支持从 Git 仓库部署）
+2. 一个 GitHub 账号（EdgeOne Makers 支持从 Git 仓库部署）
 
 ## 第一步：准备代码仓库
 
@@ -31,15 +31,15 @@ Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 1
 
 > 也可用 Turso CLI：`turso db create sms-gateway` → `turso db shell sms-gateway < schema.sql` → `turso db tokens create sms-gateway`。
 
-## 第三步：在 EdgeOne Pages 创建项目
+## 第三步：在 EdgeOne Makers 创建项目
 
-1. 登录腾讯云控制台 → 搜索 **EdgeOne Pages**（或访问 [console.cloud.tencent.com/edgeone/pages](https://console.cloud.tencent.com/edgeone/pages)）
+1. 登录腾讯云控制台 → 搜索 **EdgeOne Makers**（原「EdgeOne Pages」，或访问 [console.cloud.tencent.com/edgeone/pages](https://console.cloud.tencent.com/edgeone/pages)）
 2. 点 **创建项目** → 选择 **从 Git 仓库导入** → 授权 GitHub 后选择你 Fork 的仓库
 3. 构建配置：
    - **根目录**：`platforms/edgeone`
    - 框架预设：选「无框架 / Other」或留空（纯 Functions 无需构建）
 4. 在环境变量配置区先添加变量（见第四步），再点开始部署
-5. 等待部署完成（约 1 分钟），记下分配的 `*.edgeone.app` 类域名
+5. 等待部署完成（约 1 分钟），记下分配的默认域名（如 `*.edgeone.app`）
 
 ## 第四步：配置环境变量
 
@@ -87,7 +87,7 @@ curl "https://<域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: applica
 
 ## 第七步：配置定时清理（外部 cron）
 
-EdgeOne Pages 暂无原生定时任务，用任一免费外部 cron 服务每天调一次清理接口：
+EdgeOne Makers 暂无原生定时任务，用任一免费外部 cron 服务每天调一次清理接口：
 
 1. 打开 [cron-job.org](https://cron-job.org) 注册并 **Create cronjob**：
    - URL：`https://<你的域名>/api/cron?token=<你的RECEIVE_TOKEN>`
@@ -100,7 +100,7 @@ EdgeOne Pages 暂无原生定时任务，用任一免费外部 cron 服务每天
 
 ## 注意事项与常见问题
 
-- **兜底路由文件名**：本目录入口为 `functions/[[default]].js`。若你的 EdgeOne 版本路由不生效，可将其改名为 `functions/[[path]].js`（与 Cloudflare Pages 写法一致）后重新部署
+- **根路径 404（重要，2026-10 实测）**：EdgeOne Makers 的 Functions 路由规则中，`[[default]].js` 兜底只匹配 `/foo`、`/api/xxx` 等非根路径，**根路径 `/` 只认 `functions/index.js`**——缺少该文件时打开首页会直接命中平台默认 404 页（API 接口却正常）。本目录已内置 `functions/index.js` 解决，其逻辑与 `[[default]].js` 完全一致，改动路由处理时两处同步修改；`functions/index.js` 中的 ENV_KEYS 白名单块已纳入 `platforms/gen_app.py` 统一同步
 - **长轮询**：Functions 执行时长上限较紧，`/api/wait`（挂起 25 秒）可能被提前截断——前端自动重试，功能不受影响
 - **部署失败排查**：根目录必须是 `platforms/edgeone`；缺 `TURSO_*` 环境变量会 500 报 "config error"
 - **更新代码**：push 到 GitHub 仓库自动重新部署

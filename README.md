@@ -2,7 +2,7 @@
 
 把 Android 手机的短信和各类设备的通知实时推送到云端，通过网页随时查看。免费部署、无需服务器、约 10 分钟完成。
 
-- **多平台部署**：Cloudflare（主版本）/ Vercel / Deno Deploy / Netlify / 腾讯 EdgeOne / Docker 自托管，六选一，功能完全一致
+- **多平台部署**：Cloudflare（主版本）/ Vercel / Deno Deploy / Netlify / 腾讯 EdgeOne Makers / Docker 自托管，六选一，功能完全一致
 - **实时接收**：Webhook 秒级入库，网页自动刷新，无需手动操作
 - **通用推送**：任何能发 HTTP 请求的设备（Linux / Windows / macOS / iOS / NAS / 脚本）都能把通知推进同一个页面
 - **来源筛选**：短信与通知按来源分类展示
@@ -22,7 +22,7 @@
 | Vercel | Edge Function + Turso | 平台 cron | [platforms/vercel/README.md](platforms/vercel/README.md) |
 | Deno Deploy | Deno 原生 + Turso | Deno.cron | [platforms/deno/README.md](platforms/deno/README.md) |
 | Netlify | Functions v2 + Turso | Scheduled Function | [platforms/netlify/README.md](platforms/netlify/README.md) |
-| 腾讯 EdgeOne Pages | Functions + Turso | 外部 cron | [platforms/edgeone/README.md](platforms/edgeone/README.md) |
+| 腾讯 EdgeOne Makers | Functions + Turso | 外部 cron | [platforms/edgeone/README.md](platforms/edgeone/README.md) |
 | Fly.io / Railway / VPS | Docker（Node 22）+ Turso/本地 SQLite | 进程内置 | [platforms/node/README.md](platforms/node/README.md) |
 
 > 每个平台目录**完全自包含**（代码 + schema + 独立文档，零 npm 依赖、无需构建），点上表「详细教程」即可按步骤部署。功能与数据表结构全平台一致，可随时互相迁移。
