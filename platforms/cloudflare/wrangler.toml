@@ -1,7 +1,8 @@
 # SMS Gateway — Cloudflare Worker 配置
 # 通过 Cloudflare API / wrangler 均可部署；密钥走 Secrets，不写入本文件
+# 本文件位于 platforms/cloudflare/，main 指向同目录 worker.js；在本目录内执行 wrangler 命令即可
 name = "sms-gateway"
-main = "src/worker.js"
+main = "worker.js"
 compatibility_date = "2026-09-01"
 
 # 每天 UTC 17:00（北京时间凌晨 1 点）清理超过保留天数的线上短信
@@ -23,4 +24,7 @@ database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
 # Secrets（wrangler secret put / API 创建）：
 #   RECEIVE_TOKEN — SmsForwarder 推送鉴权 token
-# 自定义域名：绑定 Custom Domain 后 DNS 自动创建（见 README 第六步）
+# 通知转发渠道（可选）：FEISHU_WEBHOOK / WECOM_WEBHOOK / DINGTALK_WEBHOOK / SERVERCHAN_SENDKEY /
+#   PUSHPLUS_TOKEN / TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID / BARK_DEVICE_KEY / NTFY_URL /
+#   GOTIFY_URL+GOTIFY_TOKEN / RESEND_API_KEY+MAIL_TO / GENERIC_WEBHOOKS 等，配置哪个转发哪个（见 README 第五步）
+# 自定义域名：绑定 Custom Domain 后 DNS 自动创建（见 README 第七步）

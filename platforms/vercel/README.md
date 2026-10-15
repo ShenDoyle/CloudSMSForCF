@@ -53,7 +53,17 @@ Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 1
 | `ADMIN_PASSWORD` | 自己编的密码 | 仅 `ENABLE_AUTH="true"` 时需要 |
 | `RETENTION_DAYS` | `30` | 数据保留天数 |
 | `CRON_SECRET` | **与 RECEIVE_TOKEN 相同的值** | Vercel Cron 调 /api/cron 时自动附带 `Bearer $CRON_SECRET` |
-| `FEISHU_WEBHOOK` | （可选）飞书机器人 Webhook | 配置后新消息自动转发飞书群 |
+| `FEISHU_WEBHOOK` | （可选）飞书群机器人 Webhook | 配置后新消息自动转发飞书群 |
+| `WECOM_WEBHOOK` | （可选）企业微信群机器人 Webhook | 配置后新消息自动转发企微群 |
+| `DINGTALK_WEBHOOK` | （可选）钉钉群机器人 Webhook | 加签安全设置需另配 `DINGTALK_SECRET` |
+| `SERVERCHAN_SENDKEY` | （可选）Server酱 SendKey | 微信推送 |
+| `PUSHPLUS_TOKEN` | （可选）PushPlus 令牌 | 微信推送 |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | （可选）Telegram Bot | 两者都配置才生效 |
+| `BARK_DEVICE_KEY` | （可选）Bark 设备 Key | 自建服务器另配 `BARK_URL`，默认官方 |
+| `NTFY_URL` | （可选）ntfy 主题 URL | 完整 URL，如 `https://ntfy.sh/my-sms` |
+| `GOTIFY_URL` + `GOTIFY_TOKEN` | （可选）Gotify | 服务器地址 + 应用令牌 |
+| `RESEND_API_KEY` + `MAIL_TO` | （可选）邮件（Resend） | 可选 `MAIL_FROM`，默认 `onboarding@resend.dev` |
+| `GENERIC_WEBHOOKS` | （可选）通用 Webhook | 逗号分隔多个 URL；可选 `GENERIC_WEBHOOK_TEMPLATE` 自定义请求体 |
 | `SITE_NAME` / `SITE_ICON` | （可选） | 网站名 / 图标 URL |
 
 全部填完点 **Deploy**，等待约 1 分钟部署完成。

@@ -3,14 +3,14 @@
 这是项目的主版本：手机短信/通知 → Cloudflare Worker → D1 数据库 → 网页管理页。
 无需服务器、免费额度充足、全程网页点击即可完成，无需安装任何工具。
 
-本目录是文档；代码在 [`../src/worker.js`](../src/worker.js)，配置在 [`../wrangler.toml`](../wrangler.toml)。
+本目录**完全自包含**：[`worker.js`](worker.js)（部署源码）+ [`schema.sql`](schema.sql)（建表脚本）+ [`wrangler.toml`](wrangler.toml)（命令行部署可选配置），不依赖仓库其他文件。其余平台见 [平台总览](../README.md)。
 
 ---
 
 ## 准备工作
 
 1. 一个 Cloudflare 账号（[注册入口](https://dash.cloudflare.com/sign-up)，免费，邮箱即可）
-2. 本项目代码（页面上的 `src/worker.js` 就是要粘贴的全部代码）
+2. 本项目代码（本目录的 [`worker.js`](worker.js) 就是要粘贴的全部代码）
 
 ## 第一步：创建 D1 数据库
 
@@ -18,7 +18,7 @@
 2. 左侧菜单 **存储和数据库 → D1 SQL 数据库**
 3. 点 **创建数据库**，名称填 `sms-gateway-db`（其他默认），点创建
 4. 进入刚建好的数据库 → **控制台** 标签页
-5. 把 [`schema.sql`](../schema.sql) 的全部内容复制粘贴进输入框，点 **执行**
+5. 把本目录 [`schema.sql`](schema.sql) 的全部内容复制粘贴进输入框，点 **执行**
 6. 提示执行成功（会创建 `messages` 和 `devices` 两张表）
 
 ## 第二步：创建 Worker 并粘贴代码
@@ -26,7 +26,7 @@
 1. 左侧菜单 **计算（Workers）→ Workers 和 Pages**
 2. 点 **创建应用程序 → 创建 Worker**，名称填 `sms-gateway`，点 **部署**（先用默认代码部署成功即可）
 3. 点 **编辑代码**，删除编辑器里的全部默认代码
-4. 打开本项目的 [`src/worker.js`](../src/worker.js)，全选复制，粘贴进编辑器
+4. 打开本目录的 [`worker.js`](worker.js)，全选复制，粘贴进编辑器
 5. 点右上角 **部署**，提示部署成功
 
 ## 第三步：绑定 D1 数据库
@@ -52,13 +52,35 @@
 
 > 改这些值随时生效，不用重新粘贴代码。修改 `RECEIVE_TOKEN` 后记得同步更新手机端 URL 里的 `token=`。
 
-## 第五步：设置定时清理任务
+## 第五步（可选）：配置通知转发渠道
+
+新消息入库后可自动转发到外部渠道，**配置哪个渠道的变量就转发哪个，全部不配置则不转发**。
+在同一个「变量和机密」页面添加对应变量即可：
+
+| 渠道 | 变量 | 说明 |
+|---|---|---|
+| 飞书群机器人 | `FEISHU_WEBHOOK` | 群机器人 Webhook 地址 |
+| 企业微信群机器人 | `WECOM_WEBHOOK` | 群机器人 Webhook 地址 |
+| 钉钉群机器人 | `DINGTALK_WEBHOOK`（可选 `DINGTALK_SECRET`） | 加签安全设置时需配 `DINGTALK_SECRET` |
+| Server酱 | `SERVERCHAN_SENDKEY` | SendKey（微信推送） |
+| PushPlus | `PUSHPLUS_TOKEN` | 令牌（微信推送） |
+| Telegram Bot | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Bot 令牌 + 会话/群 ID |
+| Bark | `BARK_DEVICE_KEY`（可选 `BARK_URL`） | 自建服务器时配 `BARK_URL`，默认官方 |
+| ntfy | `NTFY_URL` | 完整主题 URL，如 `https://ntfy.sh/my-sms` |
+| Gotify | `GOTIFY_URL` + `GOTIFY_TOKEN` | 服务器地址（不含 `/message`）+ 应用令牌 |
+| 邮件（Resend） | `RESEND_API_KEY` + `MAIL_TO`（可选 `MAIL_FROM`） | `MAIL_FROM` 默认 `onboarding@resend.dev` |
+| 通用 Webhook | `GENERIC_WEBHOOKS`（可选 `GENERIC_WEBHOOK_TEMPLATE`） | 逗号分隔多个 URL；模板可自定义请求体，第三方 API（短信网关等）由此接入 |
+
+各渠道的申请与获取步骤、请求体格式，见 [多平台接入部署指南 · 通知转发渠道](../../docs/多平台接入部署指南.md)。
+多渠道并发转发、单渠道失败不影响其他渠道与消息入库；重复消息（`duplicated`）不会重复转发。
+
+## 第六步：设置定时清理任务
 
 1. Worker → **设置 → 触发事件 → Cron 触发器**
 2. 点 **添加 Cron 触发器**，填 `0 17 * * *`，保存
 3. 含义：每天 UTC 17:00（北京时间凌晨 1 点）自动删除超过保留天数的数据
 
-## 第六步：绑定域名（可选，推荐）
+## 第七步：绑定域名（可选，推荐）
 
 1. Worker → **设置 → 域和路由**
 2. 点 **添加 → 自定义域**，填一个子域名（如 `sms.你的域名.com`）
@@ -67,7 +89,7 @@
 
 > 没有域名也可用默认的 `https://sms-gateway.<你的子域>.workers.dev` 地址。
 
-## 第七步：验证部署
+## 第八步：验证部署
 
 浏览器打开管理页应看到你的网站名页面（默认「短信网关」，可用 `SITE_NAME` 改；若开了登录则先见登录页）。再验证接收接口（把 `<域名>` 和 `<密钥>` 换成你的）：
 
@@ -77,11 +99,13 @@ curl "https://<域名>/api/receive?token=<RECEIVE_TOKEN>" -H "Content-Type: appl
 
 返回 `{"success":true,...}` 即通。这条测试短信可在网页上删除。
 
-## 接入手机端
+## 接入手机端与各设备
 
-按 [多平台接入部署指南](../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder 与各设备通知推送，把接口域名换成你的 Worker 地址即可。
+按 [多平台接入部署指南](../../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder 与各设备通知推送，把接口域名换成你的 Worker 地址即可。
 
 ## 命令行部署（备选，会装 wrangler 的人用）
+
+在本目录（含 `wrangler.toml`，`main` 已指向本目录 `worker.js`）执行：
 
 ```bash
 npm install -g wrangler
@@ -95,6 +119,7 @@ wrangler deploy
 ## 注意事项与常见问题
 
 - **收不到转发短信**：依次排查 ① SmsForwarder 通用设置「转发短信广播」总开关（最容易漏，关了会静默丢弃且通道测试全绿）→ ② 转发规则的 token/URL 是否与 Worker 密钥一致 → ③ Worker 实时日志看请求是否到达
+- **通知渠道没收到**：确认对应渠道变量已配置且值正确；看 Worker 实时日志有无 `notify forward failed:`；`duplicated:true` 的消息不会转发
 - **Worker 免费额度**：每天 10 万次请求，个人使用绰绰有余；D1 免费额度每天 500 万行读取
 - **长轮询**：管理页 `/api/wait` 挂起最长 25 秒等待新消息，Workers 无请求时长问题，实时性最好
 - **数据迁移**：从其他平台迁回 CF 时，导出 Turso 数据再导入 D1 即可（表结构完全一致）

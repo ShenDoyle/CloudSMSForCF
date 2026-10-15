@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-从 src/worker.js 生成多平台核心 app.js，并同步独立副本到各平台目录（保证五平台功能一致）。
+从 src/worker.js 生成多平台核心 app.js，并同步独立副本到各平台目录（保证六平台功能一致）。
 
 产出：
   1. platforms/shared/app.js  — 唯一源：业务代码与 src/worker.js 逐字节一致，
@@ -10,6 +10,8 @@
   2. platforms/<平台>/app.js  — 各平台独立副本（vercel / netlify / deno / edgeone / node）
   3. platforms/<平台>/db.js   — 各平台独立副本（源：platforms/shared/db.js）
   4. platforms/<平台>/schema.sql — 建表脚本副本（源：仓库根 schema.sql）
+  5. platforms/cloudflare/{worker.js, schema.sql} — Cloudflare 主版本独立副本
+     （worker.js 与 src/worker.js 逐字节一致；wrangler.toml 为本目录静态文件，不参与同步）
 
 各平台目录因此完全自包含：入口文件只引用本目录内的 app.js / db.js，可独立部署、
 互不依赖。src/worker.js、shared/db.js 或根 schema.sql 有更新后重新执行本脚本即可全量同步。
@@ -122,11 +124,27 @@ def sync_platforms(shared_app_text: str, db_text: str) -> None:
         print("[ok] 同步独立副本 %s/{app.js,db.js,schema.sql}" % name)
 
 
+def sync_cloudflare(schema_text: str) -> None:
+    """同步 Cloudflare 主版本独立副本：worker.js（逐字节）+ schema.sql。"""
+    d = REPO_ROOT / "platforms" / "cloudflare"
+    d.mkdir(parents=True, exist_ok=True)
+    worker_text = SRC.read_text(encoding="utf-8")
+    (d / "worker.js").write_text(worker_text, encoding="utf-8", newline="\n")
+    (d / "schema.sql").write_text(schema_text, encoding="utf-8", newline="\n")
+    ok = (d / "worker.js").read_text(encoding="utf-8") == worker_text and \
+         (d / "schema.sql").read_text(encoding="utf-8") == schema_text
+    if not ok:
+        print("同步校验失败: cloudflare", file=sys.stderr)
+        sys.exit(1)
+    print("[ok] 同步独立副本 cloudflare/{worker.js,schema.sql}")
+
+
 def main() -> int:
     text = SRC.read_text(encoding="utf-8")
     shared_app_text = generate_shared_app(text)
     db_text = (SHARED_DIR / "db.js").read_text(encoding="utf-8")
     sync_platforms(shared_app_text, db_text)
+    sync_cloudflare((REPO_ROOT / "schema.sql").read_text(encoding="utf-8"))
     return 0
 
 

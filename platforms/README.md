@@ -1,17 +1,18 @@
 # 多平台部署总览
 
-SMSToWeb 除 Cloudflare 主版本外，提供五个功能完全一致的移植平台。**本目录每个平台子目录完全自包含**：
-代码（入口 + `app.js` 核心应用 + `db.js` Turso 适配层）+ `schema.sql` + 该平台的详细部署教程（README.md）。
+SMSToWeb 的全部六个平台（Cloudflare 主版本 + 五个移植平台）都在本目录。**每个平台子目录完全自包含**：
+代码（入口 + 核心应用 + 数据库适配层）+ `schema.sql` + 该平台的详细部署教程（README.md）。
 
 | 平台 | 运行时 | 定时清理 | 详细教程 |
 |---|---|---|---|
+| **Cloudflare**（主版本） | Worker + D1 | 平台 cron | [cloudflare/README.md](cloudflare/README.md) |
 | Vercel | Edge Function | 平台 cron | [vercel/README.md](vercel/README.md) |
 | Deno Deploy | Deno 原生 | `Deno.cron`（内置） | [deno/README.md](deno/README.md) |
 | Netlify | Functions v2（Node） | Scheduled Function | [netlify/README.md](netlify/README.md) |
 | EdgeOne Pages（腾讯） | Functions | 外部 cron 调 /api/cron | [edgeone/README.md](edgeone/README.md) |
 | Fly.io / Railway / VPS | Docker（Node 20） | 进程内置 | [node/README.md](node/README.md) |
 
-六平台（含 Cloudflare）接口路径、鉴权逻辑、消息模型、管理页、飞书转发、每日清理（UTC 17:00）完全一致，
+六平台（含 Cloudflare）接口路径、鉴权逻辑、消息模型、管理页、多渠道通知转发、每日清理（UTC 17:00）完全一致，
 数据表结构相同，可随时互相迁移。
 
 ## 平台怎么选
@@ -53,7 +54,7 @@ turso db shell sms-gateway < schema.sql   # 建表
 | `ENABLE_AUTH` | 否 | `"true"` 管理页需登录；默认免登录 |
 | `ADMIN_PASSWORD` | 否 | 登录密码（`ENABLE_AUTH="true"` 时必填） |
 | `RETENTION_DAYS` | 否 | 数据保留天数，默认 30 |
-| `FEISHU_WEBHOOK` | 否 | 飞书机器人 Webhook，配置后新消息自动转发飞书群 |
+| 通知渠道变量 | 否 | `FEISHU_WEBHOOK`（飞书）/ `WECOM_WEBHOOK`（企微）/ `DINGTALK_WEBHOOK`（钉钉，可选 `DINGTALK_SECRET` 加签）/ `SERVERCHAN_SENDKEY` / `PUSHPLUS_TOKEN` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_DEVICE_KEY`（可选 `BARK_URL`）/ `NTFY_URL` / `GOTIFY_URL`+`GOTIFY_TOKEN` / `RESEND_API_KEY`+`MAIL_TO`（邮件，可选 `MAIL_FROM`）/ `GENERIC_WEBHOOKS`（通用 Webhook，可选 `GENERIC_WEBHOOK_TEMPLATE`）。配置哪个转发哪个，全部不配置则不转发 |
 | `SITE_NAME` / `SITE_ICON` | 否 | 网站名 / 图标 URL，未设置用默认值 |
 | `CRON_SECRET`（仅 Vercel） | 否 | 设为与 `RECEIVE_TOKEN` 相同值，供 Vercel Cron 调 /api/cron |
 
@@ -61,13 +62,14 @@ turso db shell sms-gateway < schema.sql   # 建表
 
 ```
 platforms/
-├── vercel/    # api/[[...route]].js + app.js + db.js + schema.sql + vercel.json + README.md
-├── netlify/   # functions/{api,cron}.mjs + app.js + db.js + schema.sql + netlify.toml + README.md
-├── deno/      # main.js + app.js + db.js + schema.sql + README.md
-├── edgeone/   # functions/[[default]].js + app.js + db.js + schema.sql + README.md
-├── node/      # server.mjs + app.js + db.js + schema.sql + Dockerfile + package.json + README.md
-├── shared/    # app.js / db.js 唯一源（gen_app.py 由此同步到各平台目录）
-└── gen_app.py # 生成器：从 ../src/worker.js 生成 app.js 并同步全部平台
+├── cloudflare/ # 主版本：worker.js + schema.sql + wrangler.toml + README.md（自包含）
+├── vercel/     # api/[[...route]].js + app.js + db.js + schema.sql + vercel.json + README.md
+├── netlify/    # functions/{api,cron}.mjs + app.js + db.js + schema.sql + netlify.toml + README.md
+├── deno/       # main.js + app.js + db.js + schema.sql + README.md
+├── edgeone/    # functions/[[default]].js + app.js + db.js + schema.sql + README.md
+├── node/       # server.mjs + app.js + db.js + schema.sql + Dockerfile + package.json + README.md
+├── shared/     # app.js / db.js 唯一源（gen_app.py 由此同步到各平台目录）
+└── gen_app.py  # 生成器：从 ../src/worker.js 生成 app.js 并同步全部平台（含 cloudflare 独立副本）
 ```
 
 每个平台目录可单独作为部署根目录（Git 部署时把平台 Root Directory 指到对应子目录即可），

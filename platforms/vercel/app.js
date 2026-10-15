@@ -10,7 +10,14 @@
  * 可配置项（部署时在 Variables / wrangler.toml [vars] 设置）：
  *   RETENTION_DAYS   — 数据保留天数，默认 30（每天 UTC 17:00 定时清理）
  *   ENABLE_AUTH      — 管理页登录开关："true" 需密码登录，"false" 免登录（默认）
- *   FEISHU_WEBHOOK   — 飞书机器人 Webhook（可选）：绑定后收到新消息自动转发到飞书群
+ *   通知转发（可选，多渠道并发；配置哪个渠道变量就转发哪个，全部未配置则不转发）：
+ *     FEISHU_WEBHOOK / WECOM_WEBHOOK / DINGTALK_WEBHOOK(+DINGTALK_SECRET) — 飞书 / 企业微信 / 钉钉群机器人
+ *     SERVERCHAN_SENDKEY / PUSHPLUS_TOKEN — Server酱 / PushPlus
+ *     TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID — Telegram Bot
+ *     BARK_DEVICE_KEY(+BARK_URL，默认官方) / NTFY_URL / GOTIFY_URL + GOTIFY_TOKEN — Bark / ntfy / Gotify
+ *     RESEND_API_KEY + MAIL_TO(+MAIL_FROM) — 邮件（Resend）
+ *     GENERIC_WEBHOOKS（逗号分隔多 URL，可选 GENERIC_WEBHOOK_TEMPLATE 自定义请求体）— 通用 Webhook，
+ *     第三方 API（短信网关等）均由此接入
  *   SITE_NAME        — 网站名（可选）：管理页标题/页头，默认「短信网关」
  *   SITE_ICON        — 网站图标 URL（可选）：默认 jsdelivr favicon；设置了但加载失败自动回退默认
  *   （Secret）RECEIVE_TOKEN   — 推送鉴权（/api/receive 与 /api/push 共用）
@@ -195,31 +202,172 @@ function normalizeTime(t) {
   return isNaN(d.getTime()) ? nowUTC() : toStr(d);
 }
 
-/* ---------------- 飞书机器人转发（可选，绑定 FEISHU_WEBHOOK 后自动启用） ---------------- */
+/* ---------------- 多渠道通知转发（可选：配置哪个渠道变量就转发到哪个渠道） ----------------
+ * 新消息入库成功后并发转发到全部已配置渠道；单个渠道失败只记日志，不影响其他渠道与主流程；
+ * 全部渠道变量未配置时不发任何请求。渠道与变量清单一览：
+ *   飞书        FEISHU_WEBHOOK
+ *   企业微信    WECOM_WEBHOOK
+ *   钉钉        DINGTALK_WEBHOOK（可选 DINGTALK_SECRET 加签）
+ *   Server酱    SERVERCHAN_SENDKEY
+ *   PushPlus    PUSHPLUS_TOKEN
+ *   Telegram    TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+ *   Bark        BARK_DEVICE_KEY（可选 BARK_URL，默认官方 https://api.day.app）
+ *   ntfy        NTFY_URL（完整主题 URL，如 https://ntfy.sh/my-sms）
+ *   Gotify      GOTIFY_URL + GOTIFY_TOKEN
+ *   邮件        RESEND_API_KEY + MAIL_TO（可选 MAIL_FROM，默认 onboarding@resend.dev）
+ *   通用        GENERIC_WEBHOOKS（逗号分隔多个 URL；可选 GENERIC_WEBHOOK_TEMPLATE 自定义请求体，
+ *               占位符 {{title}}/{{content}}/{{time}}/{{source}}/{{sender}}/{{device}}）
+ */
 
-/* UTC 时间串 → 北京时间串（用于飞书消息展示） */
+/* UTC 时间串 → 北京时间串（用于通知消息展示） */
 function bjTime(utcStr) {
   const d = new Date(String(utcStr || "").replace(" ", "T") + "Z");
   if (isNaN(d.getTime())) return String(utcStr || "");
   return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().replace("T", " ").slice(0, 19) + "（北京时间）";
 }
 
-/* 转发一条消息到飞书群；未配置 Webhook 或发送失败均不影响主流程 */
-async function forwardFeishu(env, head, content, timeStr) {
-  const hook = env.FEISHU_WEBHOOK;
-  if (!hook) return;
-  try {
-    await fetch(hook, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        msg_type: "text",
-        content: { text: head + "\n" + String(content || "") + (timeStr ? "\n" + timeStr : "") },
-      }),
-    });
-  } catch (e) {
-    console.error("feishu forward failed:", e && e.message);
+function trimEnv(v) {
+  return String(v === undefined || v === null ? "" : v).trim();
+}
+
+/* 通知渠道通用 POST；非 2xx 抛错由调用方记日志（不抛出影响主流程） */
+async function postNotify(url, headers, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, headers || {}),
+    body: body,
+  });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+}
+
+/* HMAC-SHA256 → base64（钉钉加签） */
+async function hmacSha256Base64(secret, payload) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
+  let bin = "";
+  for (const b of new Uint8Array(sig)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+/**
+ * 把一条已入库消息转发到全部已配置的通知渠道。
+ * msg: { title, content, time, source, sender, device }
+ * 返回 Promise（配合 ctx.waitUntil 保证 Worker 响应后仍在后台完成发送）。
+ */
+function dispatchNotify(env, msg) {
+  const text = msg.title + "\n" + String(msg.content || "") + (msg.time ? "\n" + msg.time : "");
+  const jobs = [];
+  const t = trimEnv;
+
+  const feishu = t(env.FEISHU_WEBHOOK);
+  if (feishu) jobs.push(async function () {
+    await postNotify(feishu, null, JSON.stringify({ msg_type: "text", content: { text: text } }));
+  });
+
+  const wecom = t(env.WECOM_WEBHOOK);
+  if (wecom) jobs.push(async function () {
+    await postNotify(wecom, null, JSON.stringify({ msgtype: "text", text: { content: text } }));
+  });
+
+  const dingtalk = t(env.DINGTALK_WEBHOOK);
+  if (dingtalk) jobs.push(async function () {
+    let url = dingtalk;
+    const secret = t(env.DINGTALK_SECRET);
+    if (secret) {
+      const ts = Date.now();
+      const sign = await hmacSha256Base64(secret, ts + "\n" + secret);
+      url += (url.indexOf("?") === -1 ? "?" : "&") + "timestamp=" + ts + "&sign=" + encodeURIComponent(sign);
+    }
+    await postNotify(url, null, JSON.stringify({ msgtype: "text", text: { content: text } }));
+  });
+
+  const serverchan = t(env.SERVERCHAN_SENDKEY);
+  if (serverchan) jobs.push(async function () {
+    const desp = String(msg.content || "") + (msg.time ? "\n\n" + msg.time : "");
+    await postNotify(
+      "https://sctapi.ftqq.com/" + encodeURIComponent(serverchan) + ".send",
+      { "Content-Type": "application/x-www-form-urlencoded" },
+      new URLSearchParams({ title: msg.title, desp: desp }).toString()
+    );
+  });
+
+  const pushplus = t(env.PUSHPLUS_TOKEN);
+  if (pushplus) jobs.push(async function () {
+    await postNotify("https://www.pushplus.plus/send", null,
+      JSON.stringify({ token: pushplus, title: msg.title, content: text, template: "txt" }));
+  });
+
+  const tgBot = t(env.TELEGRAM_BOT_TOKEN), tgChat = t(env.TELEGRAM_CHAT_ID);
+  if (tgBot && tgChat) jobs.push(async function () {
+    await postNotify("https://api.telegram.org/bot" + tgBot + "/sendMessage", null,
+      JSON.stringify({ chat_id: tgChat, text: text }));
+  });
+
+  const barkKey = t(env.BARK_DEVICE_KEY);
+  if (barkKey) jobs.push(async function () {
+    const server = (t(env.BARK_URL) || "https://api.day.app").replace(/\/+$/, "");
+    await postNotify(server + "/push", null,
+      JSON.stringify({ device_key: barkKey, title: msg.title, body: text, group: "SMSToWeb" }));
+  });
+
+  const ntfy = t(env.NTFY_URL);
+  if (ntfy) jobs.push(async function () {
+    await postNotify(ntfy, { Title: msg.title }, text);
+  });
+
+  const gotifyUrl = t(env.GOTIFY_URL), gotifyToken = t(env.GOTIFY_TOKEN);
+  if (gotifyUrl && gotifyToken) jobs.push(async function () {
+    await postNotify(gotifyUrl.replace(/\/+$/, "") + "/message?token=" + encodeURIComponent(gotifyToken), null,
+      JSON.stringify({ title: msg.title, message: text, priority: 5 }));
+  });
+
+  const resendKey = t(env.RESEND_API_KEY), mailTo = t(env.MAIL_TO);
+  if (resendKey && mailTo) jobs.push(async function () {
+    const to = mailTo.split(/[,;，；]/).map(function (s) { return s.trim(); }).filter(Boolean);
+    await postNotify("https://api.resend.com/emails",
+      { Authorization: "Bearer " + resendKey },
+      JSON.stringify({
+        from: t(env.MAIL_FROM) || "onboarding@resend.dev",
+        to: to,
+        subject: msg.title,
+        text: text,
+      }));
+  });
+
+  /* 通用 Webhook：默认 POST JSON {title,content,time,source,sender,device}；
+     配置 GENERIC_WEBHOOK_TEMPLATE 后按模板渲染请求体（可解析为 JSON 则按 JSON 发送，否则按纯文本），
+     第三方 API（短信网关、自建系统等）由此接入 */
+  const genericUrls = String(env.GENERIC_WEBHOOKS || "").split(",").map(function (s) { return s.trim(); })
+    .filter(function (u) { return /^https?:\/\//i.test(u); });
+  if (genericUrls.length) {
+    const payload = {
+      title: msg.title, content: String(msg.content || ""), time: msg.time || "",
+      source: msg.source || "", sender: msg.sender || "", device: msg.device || "",
+    };
+    let genericBody = JSON.stringify(payload);
+    let genericCt = "application/json";
+    const tpl = t(env.GENERIC_WEBHOOK_TEMPLATE);
+    if (tpl) {
+      genericBody = tpl;
+      for (const k of Object.keys(payload)) {
+        genericBody = genericBody.split("{{" + k + "}}").join(String(payload[k]));
+      }
+      try { JSON.parse(genericBody); } catch (e) { genericCt = "text/plain"; }
+    }
+    for (const u of genericUrls) {
+      jobs.push(async function () { await postNotify(u, { "Content-Type": genericCt }, genericBody); });
+    }
   }
+
+  if (!jobs.length) return Promise.resolve();
+  return Promise.allSettled(jobs.map(function (job) {
+    return job().catch(function (e) {
+      console.error("notify forward failed:", e && e.message);
+    });
+  }));
 }
 
 /* ---------------- 接收（短信：SmsForwarder 等 App Webhook） ---------------- */
@@ -255,7 +403,14 @@ async function handleReceive(request, env, url, ctx) {
 
   if (!duplicated) {
     const head = "【短信】" + (data.sim || "未知收件号") + (data.from ? " ← " + data.from : "");
-    ctx.waitUntil(forwardFeishu(env, head, data.content, bjTime(receivedAt)));
+    ctx.waitUntil(dispatchNotify(env, {
+      title: head,
+      content: data.content,
+      time: bjTime(receivedAt),
+      source: "sms",
+      sender: data.from,
+      device: data.name || data.sim,
+    }));
   }
 
   return json({
@@ -301,7 +456,14 @@ async function handlePush(request, env, url, ctx) {
 
   if (!duplicated) {
     const head = "【" + source + "】" + (sender ? sender + " · " : "") + deviceName;
-    ctx.waitUntil(forwardFeishu(env, head, content, bjTime(receivedAt)));
+    ctx.waitUntil(dispatchNotify(env, {
+      title: head,
+      content: content,
+      time: bjTime(receivedAt),
+      source: source,
+      sender: sender,
+      device: deviceName,
+    }));
   }
 
   return json({ success: true, device_id: dev.id, duplicated });

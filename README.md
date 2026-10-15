@@ -6,7 +6,7 @@
 - **实时接收**：Webhook 秒级入库，网页自动刷新，无需手动操作
 - **通用推送**：任何能发 HTTP 请求的设备（Linux / Windows / macOS / iOS / NAS / 脚本）都能把通知推进同一个页面
 - **来源筛选**：短信与通知按来源分类展示
-- **双通道备份**：云端网关 + 飞书机器人同时推送，防单点丢失（可选）
+- **多渠道通知**：新消息可自动转发到飞书 / 企微 / 钉钉 / Telegram / Server酱 / PushPlus / Bark / ntfy / Gotify / 邮件 / 自定义 Webhook，配置哪个转发哪个（可选）
 - **安全可选**：管理页登录开关、验证码识别与一键复制、暗色模式
 
 ```
@@ -18,7 +18,7 @@
 
 | 平台 | 部署方式 | 定时清理 | 详细教程 |
 |---|---|---|---|
-| **Cloudflare**（推荐） | Worker + D1 | 平台 cron | [cloudflare/README.md](cloudflare/README.md) |
+| **Cloudflare**（推荐） | Worker + D1 | 平台 cron | [platforms/cloudflare/README.md](platforms/cloudflare/README.md) |
 | Vercel | Edge Function + Turso | 平台 cron | [platforms/vercel/README.md](platforms/vercel/README.md) |
 | Deno Deploy | Deno 原生 + Turso | Deno.cron | [platforms/deno/README.md](platforms/deno/README.md) |
 | Netlify | Functions v2 + Turso | Scheduled Function | [platforms/netlify/README.md](platforms/netlify/README.md) |
@@ -53,7 +53,7 @@ POST https://<你的域名>/api/push?token=<RECEIVE_TOKEN>
 | `ENABLE_AUTH` | 否 | `"true"` 管理页需登录；默认免登录 |
 | `ADMIN_PASSWORD` | 否 | 登录密码（`ENABLE_AUTH="true"` 时必填） |
 | `RETENTION_DAYS` | 否 | 数据保留天数，默认 30 |
-| `FEISHU_WEBHOOK` | 否 | 飞书机器人 Webhook，配置后新消息自动转发飞书群 |
+| 通知渠道变量 | 否 | `FEISHU_WEBHOOK`（飞书）/ `WECOM_WEBHOOK`（企微）/ `DINGTALK_WEBHOOK`（钉钉，可选 `DINGTALK_SECRET` 加签）/ `SERVERCHAN_SENDKEY` / `PUSHPLUS_TOKEN` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_DEVICE_KEY`（可选 `BARK_URL`）/ `NTFY_URL` / `GOTIFY_URL`+`GOTIFY_TOKEN` / `RESEND_API_KEY`+`MAIL_TO`（邮件，可选 `MAIL_FROM`）/ `GENERIC_WEBHOOKS`（通用 Webhook，可选 `GENERIC_WEBHOOK_TEMPLATE` 自定义请求体）。配置哪个转发哪个，全部不配置则不转发 |
 | `SITE_NAME` / `SITE_ICON` | 否 | 网站名 / 图标 URL，未设置用默认值 |
 
 Cloudflare 平台额外需要 `DB`（D1 绑定）；其余平台需要 `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN`（Turso 数据库，见各平台教程）。
@@ -67,7 +67,7 @@ Cloudflare 平台额外需要 `DB`（D1 绑定）；其余平台需要 `TURSO_DA
 ## 开发说明
 
 - `src/worker.js`：核心源码（Cloudflare Worker 形态）
-- `platforms/gen_app.py`：从 `src/worker.js` 生成平台无关的 `app.js` 并同步到各平台目录（保证六平台业务代码逐字节一致）
+- `platforms/gen_app.py`：从 `src/worker.js` 生成平台无关的 `app.js` 同步到五个移植平台，并同步 Cloudflare 独立副本 `worker.js`（保证六平台业务代码逐字节一致）
 - `platforms/*/`：各平台自包含部署目录（入口 + app.js + db.js 适配层 + schema.sql + 本平台教程）
 - `docs/多平台接入部署指南.md`：接收端配置文档
 - 修改核心代码后：`python platforms/gen_app.py` 重新同步全部平台
