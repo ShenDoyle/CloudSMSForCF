@@ -18,16 +18,15 @@ SMSToWeb 的全部六个平台（Cloudflare 主版本 + 五个移植平台）都
 ## 平台怎么选
 
 - **想要零成本 + 省心** → Cloudflare 主版本（D1 免费额度大，Worker 无时长问题）
-- **想体验多平台** → Deno Deploy（与 Worker 语义最接近，长轮询无截断）
+- **想体验多平台** → Deno Deploy（与 Worker 语义最接近，长轮询基本无截断）
 - **主要国内访问** → EdgeOne Makers（注意自定义域名需备案）
 - **已有服务器 / 想完全自控** → node/（Docker 自托管）
 
-> 长轮询说明：管理页通过 `GET /api/wait` 挂起最长 25 秒等待新消息。在函数时长较紧的平台（Netlify 免费版、
-> Vercel Edge、EdgeOne）可能被平台提前截断——前端轮询循环会立即重试，**功能不受影响**，仅新消息提醒稍不及时。
+> 长轮询说明：管理页通过 `GET /api/wait` 挂起最长 25 秒等待新消息。在函数时长较紧的平台（Vercel Edge 要求 25 秒内开始响应、EdgeOne）可能被平台提前截断（Netlify 现行 60 秒上限，一般可完整等待）——前端轮询循环会立即重试，**功能不受影响**，仅新消息提醒稍不及时。
 
 ## 通用准备（所有非 Cloudflare 平台共用）
 
-**数据库统一用 [Turso](https://turso.tech)**（SQLite 兼容，免费额度：500 个数据库、每月 10 亿次行读取）：
+**数据库统一用 [Turso](https://turso.tech)**（SQLite 兼容，免费额度：100 个数据库、5GB 存储、每月 5 亿行读取）：
 
 1. 打开 [turso.tech](https://turso.tech)，用 GitHub 登录
 2. **Create Database**：名称 `sms-gateway`，区域选 Singapore / Hong Kong，类型 Free
@@ -83,7 +82,7 @@ platforms/
 ## 从 Cloudflare Worker 迁移到其他平台
 
 1. 按上文准备 Turso 库并建表
-2. （可选）迁移历史数据：CF Dashboard 导出 D1 数据（SQLite 文件）→ `turso db shell <库> .import` 导入
+2. （可选）迁移历史数据：CF Dashboard 导出 D1 数据（SQLite 文件）→ `turso db import` 导入（见官方 CLI 文档）
 3. 按目标平台 README 部署，验证管理页与 /api/push 正常
 4. 把手机端与各推送脚本的 Webhook 域名换到新平台
 5. 观察一两天无异常后停用旧 Worker

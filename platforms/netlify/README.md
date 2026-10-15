@@ -17,9 +17,9 @@
 
 ## 第二步：创建 Turso 数据库
 
-Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 10 亿次行读取）。
+Turso 提供 SQLite 兼容数据库（免费额度：100 个数据库、5GB 存储、每月 5 亿行读取）。
 
-1. 打开 [turso.tech](https://turso.tech)，点 **Get Started**，用 GitHub 登录
+1. 打开 [turso.tech](https://turso.tech)，点 **Start for free now**，用 GitHub 登录
 2. 进入控制台 → **Create Database**：
    - Name：`sms-gateway`
    - Location：选离你近的区域（如 Singapore / Hong Kong）
@@ -33,7 +33,7 @@ Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 1
 
 ## 第三步：导入仓库到 Netlify
 
-1. 登录 [app.netlify.com](https://app.netlify.com) → **Add new site → Import an existing project**
+1. 登录 [app.netlify.com](https://app.netlify.com) → **Add new project → Import an existing project**
 2. 选择 **Deploy with GitHub**，授权后在列表选你 Fork 的仓库
 3. 部署配置页（Site settings for…）：
    - **Base directory**（根目录）：填 `platforms/netlify`
@@ -42,7 +42,7 @@ Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 1
 
 ## 第四步：配置环境变量
 
-部署配置页高级选项中添加（后续也可在 **Site configuration → Environment variables** 里改）：
+部署配置页高级选项中添加（后续也可在 **Project configuration → Environment variables** 里改）：
 
 | 名称 | 值 | 说明 |
 |---|---|---|
@@ -83,11 +83,12 @@ curl "https://<域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: applica
 
 按 [多平台接入部署指南](../../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder 与各设备通知推送，域名用你的 `xxx.netlify.app`。
 
-自定义域名：**Site configuration → Change site name**（改子域名）或 **Domain management → Add a domain**（自有域名，按提示加 DNS）。
+自定义域名：**Project configuration → Change site name**（改子域名）或 **Domain management → Add a domain**（自有域名，按提示加 DNS）。
 
 ## 注意事项与常见问题
 
 - **定时清理**：`functions/cron.mjs` 是 Netlify Scheduled Function，部署后自动注册（每天 UTC 17:00 = 北京 01:00），无需额外配置。验证：站点 **Functions** 页可看到 `cron` 函数及其调度状态
-- **免费版函数时长**：同步函数 10 秒级上限，管理页长轮询 `/api/wait`（挂起 25 秒）**会被提前截断**——前端轮询循环会立即重试，**功能不受影响**，仅新消息提醒稍不及时。若在意实时性，建议选 Cloudflare / Deno Deploy / 自托管版本
+- **函数时长与实时性**：函数默认执行上限现为 60 秒（各计划一致），管理页长轮询 `/api/wait`（挂起 25 秒）可完整等待，实时性良好；实时性要求极高仍建议选 Cloudflare / 自托管版本
+- **免费额度**：2025-09 起新账号采用信用点计费（Free 计划每月 300 信用点，函数用量按 GB-小时计入），个人小流量足够；老账号可留在原套餐
 - **部署失败排查**：Base directory 必须是 `platforms/netlify`；缺 `TURSO_*` 环境变量会 500 报 "config error"；可在站点 **Functions → api → 日志** 查看报错详情
 - **更新代码**：push 到 GitHub 仓库自动重新部署

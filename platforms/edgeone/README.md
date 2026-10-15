@@ -17,9 +17,9 @@
 
 ## 第二步：创建 Turso 数据库
 
-Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 10 亿次行读取）。EdgeOne Functions 内访问外网数据库畅通。
+Turso 提供 SQLite 兼容数据库（免费额度：100 个数据库、5GB 存储、每月 5 亿行读取）。EdgeOne Functions 内访问外网数据库畅通。
 
-1. 打开 [turso.tech](https://turso.tech)，点 **Get Started**，用 GitHub 登录
+1. 打开 [turso.tech](https://turso.tech)，点 **Start for free now**，用 GitHub 登录
 2. 进入控制台 → **Create Database**：
    - Name：`sms-gateway`
    - Location：建议选 Singapore / Hong Kong（国内访问延迟低）

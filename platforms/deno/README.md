@@ -2,6 +2,8 @@
 
 把 SMSToWeb 部署到 Deno Deploy（Deno 原生运行时 + Turso 数据库）。与 Cloudflare Worker 语义最接近，免费版每月 100 万次请求，全程约 15 分钟。
 
+> 平台说明：Deno Deploy 已升级为新一代平台，控制台为 [console.deno.com](https://console.deno.com)（旧版 dash.deno.com 已关停），采用类似 CI 的 Git 构建模式。
+
 **本目录文件**：`main.js`（入口，含 `Deno.serve` 与内置 `Deno.cron` 定时清理）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）。
 
 ---
@@ -9,7 +11,7 @@
 ## 准备工作
 
 1. 一个 GitHub 账号
-2. 一个 Deno Deploy 账号（[注册入口](https://dash.deno.com/signin)，直接用 GitHub 登录）
+2. 一个 Deno Deploy 账号（[注册入口](https://console.deno.com)，直接用 GitHub 登录）
 
 ## 第一步：准备代码仓库
 
@@ -17,9 +19,9 @@
 
 ## 第二步：创建 Turso 数据库
 
-Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 10 亿次行读取）。
+Turso 提供 SQLite 兼容数据库（免费额度：100 个数据库、5GB 存储、每月 5 亿行读取）。
 
-1. 打开 [turso.tech](https://turso.tech)，点 **Get Started**，用 GitHub 登录
+1. 打开 [turso.tech](https://turso.tech)，点 **Start for free now**，用 GitHub 登录
 2. 进入控制台 → **Create Database**：
    - Name：`sms-gateway`
    - Location：选离你近的区域（如 Singapore / Hong Kong）
@@ -31,19 +33,19 @@ Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 1
 
 > 也可用 Turso CLI：`turso db create sms-gateway` → `turso db shell sms-gateway < schema.sql` → `turso db tokens create sms-gateway`。
 
-## 第三步：在 Deno Deploy 创建项目并关联仓库
+## 第三步：在 Deno Deploy 创建应用并关联仓库
 
-1. 登录 [dash.deno.com](https://dash.deno.com) → **New Project**（或 Create）
-2. 选择 **Deploy from GitHub repository**（从 GitHub 仓库部署），授权并选择你 Fork 的仓库
-3. 关键配置（Build Configuration）：
-   - **Root Directory**：`platforms/deno`
+1. 登录 [console.deno.com](https://console.deno.com) → 点 **+ New App**（新建应用）
+2. 选择 **从 GitHub 仓库部署**，授权并选择你 Fork 的仓库
+3. 配置构建（Build Configuration）：
+   - **运行目录**（Runtime working directory）：`platforms/deno`
    - **Entrypoint**（入口文件）：`main.js`
-4. 先点 **Add Variable**（或部署后在 Settings 里）配置环境变量，见第四步
-5. 点 **Deploy / Link**，等待构建完成
+4. 先添加环境变量（见第四步），再触发首次部署
+5. 部署完成后，push 到 GitHub 仓库会自动重新构建
 
 ## 第四步：配置环境变量
 
-项目 **Settings → Environment Variables** 中逐个添加：
+应用 **Settings → Environment Variables** 中逐个添加（也可在创建应用时的配置页中添加）：
 
 | 名称 | 值 | 说明 |
 |---|---|---|
@@ -70,7 +72,7 @@ Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 1
 
 ## 第五步：验证部署
 
-1. 记下分配的域名（形如 `https://xxx.deno.dev`，区域实例另有 `xxx.deno.dev` 区域后缀）
+1. 记下分配的域名（形如 `https://<应用名>.<组织名>.deno.net`）
 2. 浏览器打开该域名，应看到管理页（默认「短信网关」；开了登录则先见登录页）
 3. 验证推送接口：
 
@@ -82,14 +84,14 @@ curl "https://<域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: applica
 
 ## 第六步：接入手机端与设备
 
-按 [多平台接入部署指南](../../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder 与各设备通知推送，域名用你的 `xxx.deno.dev`。
+按 [多平台接入部署指南](../../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder 与各设备通知推送，域名用你的 `xxx.deno.net`。
 
-自定义域名：项目 **Settings → Domains** → Add Domain，按提示在域名 DNS 加 CNAME 记录。
+自定义域名：在组织的 **Domains** 标签页添加域名并分配给你的应用，按提示在域名 DNS 加 CNAME（或 A 记录）与验证记录，HTTPS 证书自动签发。
 
 ## 注意事项与常见问题
 
 - **定时清理**：`Deno.cron` 在部署时自动注册（每天 UTC 17:00 = 北京 01:00），无需任何额外配置，也不能手动触发测试——验证可看 D1/Turso 数据是否按期减少
-- **免费额度**：每月 100 万次请求、100 万次 CPU 毫秒，个人使用绰绰有余
-- **长轮询**：Deno Deploy 无严格函数时长上限，`/api/wait` 25 秒长轮询工作良好，实时性与 Worker 版一致
-- **部署失败排查**：Entrypoint 必须填 `main.js`、Root Directory 必须是 `platforms/deno`；缺 `TURSO_*` 环境变量会 500 报 "config error"
+- **免费额度**：每月 100 万次请求、Active CPU 10 小时、20GiB 出站流量，个人使用绰绰有余
+- **长轮询**：Deno Deploy 无严格的单请求时长上限，`/api/wait` 25 秒长轮询工作良好；实例空闲时可能被平台回收重启（被中断的长轮询由前端自动重试），实时性与 Worker 版基本一致
+- **部署失败排查**：Entrypoint 必须填 `main.js`、运行目录必须是 `platforms/deno`；缺 `TURSO_*` 环境变量会 500 报 "config error"
 - **更新代码**：push 到 GitHub 仓库自动重新部署

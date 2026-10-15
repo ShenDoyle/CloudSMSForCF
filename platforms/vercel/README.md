@@ -18,9 +18,9 @@
 
 ## 第二步：创建 Turso 数据库
 
-Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 10 亿次行读取）。
+Turso 提供 SQLite 兼容数据库（免费额度：100 个数据库、5GB 存储、每月 5 亿行读取）。
 
-1. 打开 [turso.tech](https://turso.tech)，点 **Get Started**，用 GitHub 登录
+1. 打开 [turso.tech](https://turso.tech)，点 **Start for free now**，用 GitHub 登录
 2. 进入控制台 → **Create Database**（创建数据库）：
    - Name：`sms-gateway`
    - Location：选离你近的区域（如 Singapore / Hong Kong）
@@ -84,12 +84,12 @@ curl "https://<域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: applica
 
 按 [多平台接入部署指南](../../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder（短信走 `/api/receive`）和各设备通知推送（走 `/api/push`），域名用你的 `xxx.vercel.app`（或绑定自定义域名）。
 
-绑定自定义域名：Project → **Settings → Domains** → Add，按提示去域名 DNS 加一条 CNAME 记录指向 `cname.vercel-dns.com`。
+绑定自定义域名：Project → **Settings → Domains** → Add，按提示在域名 DNS 加一条 CNAME 记录——目标值以 Domains 页面显示的为准（Vercel 为每个项目分配专属的 `xxxxxx.vercel-dns.com` 地址）。
 
 ## 注意事项与常见问题
 
 - **定时清理**：`vercel.json` 已配置每天 UTC 17:00（北京 01:00）调用 `/api/cron` 清理过期数据。Vercel Cron 会自动带 `Authorization: Bearer $CRON_SECRET`，所以 `CRON_SECRET` 必须与 `RECEIVE_TOKEN` 一致
-- **Hobby（免费）版限制**：cron 仅支持每天一次（本项目正好一天一次，满足）；Serverless 函数有执行时长上限，管理页长轮询 `/api/wait`（挂起 25 秒）可能被提前截断——前端会自动重试，**不影响功能**，仅新消息提醒稍不及时
+- **Hobby（免费）版限制**：cron 仅支持每天一次（本项目正好一天一次，满足；实际触发时刻可能在设定小时内浮动，属正常现象）；Edge 函数须在 **25 秒内开始返回响应**（之后可持续流式 300 秒），管理页长轮询 `/api/wait` 恰好挂起 25 秒处于边界——若被提前截断，前端轮询循环会自动重试，**不影响功能**，仅新消息提醒稍不及时
 - **Edge Runtime**：入口已声明 `runtime = "edge"`，冷启动快、全球边缘节点执行
 - **部署失败排查**：多为环境变量漏填——缺 `TURSO_*` 会 500 且报 "config error"；检查 Root Directory 是否选对 `platforms/vercel`
 - **更新代码**：推送（push）到你 Fork 的仓库，Vercel 自动重新部署

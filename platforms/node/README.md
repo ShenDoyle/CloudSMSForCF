@@ -13,7 +13,7 @@
 
 ## 第一步：创建 Turso 数据库
 
-1. 打开 [turso.tech](https://turso.tech)，点 **Get Started**，用 GitHub 登录
+1. 打开 [turso.tech](https://turso.tech)，点 **Start for free now**，用 GitHub 登录
 2. 进入控制台 → **Create Database**：
    - Name：`sms-gateway`
    - Location：选离服务器近的区域
@@ -52,7 +52,7 @@ curl "https://<app>.fly.dev/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: ap
 1. 登录 [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**，选择你 Fork 的仓库
 2. 服务设置 **Settings → Root Directory**：`platforms/node`（Railway 自动识别 Dockerfile 并构建）
 3. **Variables** 面板添加环境变量（见下方通用表；`PORT` 平台自动注入，代码已适配）
-4. **Settings → Networking → Generate Domain** 生成公网域名
+4. **Settings → Public Networking → Generate Domain** 生成公网域名
 5. 验证同上（换成你的 Railway 域名）
 
 ## 方式 C：任意 VPS（Docker）
@@ -105,7 +105,7 @@ curl "http://127.0.0.1:8787/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: ap
 
 - **定时清理**：进程内置每天 UTC 17:00（北京 01:00）自动清理，无需配置。也可改用平台调度器（Fly Machines Cron / Railway Cron）调 `GET /api/cron?token=<RECEIVE_TOKEN>`，二选一
 - **常驻进程优势**：无函数时长上限，`/api/wait` 长轮询与 Cloudflare Worker 体验一致，实时性最好
-- **免费额度**：Fly.io 免费额度已改为按量计费（新账号需绑卡，微用量基本免费）；Railway 提供一次性试用额度，之后按用量计费——长期零成本首选 Cloudflare 主版本
+- **免费额度**：Fly.io 已无免费额度（仅新账号 7 天 / 2 VM 小时试用，绑卡即转按量计费，微用量费用很低）；Railway 提供一次性 $5 试用额度（30 天有效），Hobby 计划 $5/月含等额使用额度——长期零成本首选 Cloudflare 主版本
 - **数据备份**：Turso 模式下数据都在 Turso，换服务器只需重新配好环境变量，数据无损；本地 SQLite 模式定期备份 `SQLITE_PATH` 文件即可
 - **登录保护**：登录接口已内置限速——同一 IP 连续失败 5 次锁定 10 分钟（内存态，进程重启即清零）
 - **日志排查**：`fly logs` / Railway Deployments → Logs / `docker logs smstoweb`

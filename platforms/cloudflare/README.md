@@ -24,14 +24,14 @@
 ## 第二步：创建 Worker 并粘贴代码
 
 1. 左侧菜单 **计算（Workers）→ Workers 和 Pages**
-2. 点 **创建应用程序 → 创建 Worker**，名称填 `sms-gateway`，点 **部署**（先用默认代码部署成功即可）
+2. 点 **创建应用程序**，选择 **Start with Hello World!**（从 Hello World 模板开始），名称填 `sms-gateway`，点 **部署**（先用默认代码部署成功即可）
 3. 点 **编辑代码**，删除编辑器里的全部默认代码
 4. 打开本目录的 [`worker.js`](worker.js)，全选复制，粘贴进编辑器
 5. 点右上角 **部署**，提示部署成功
 
 ## 第三步：绑定 D1 数据库
 
-1. 回到 Worker 概览页 → **设置 → 绑定**
+1. 回到 Worker 概览页 → **Bindings（绑定）** 标签页
 2. 点 **添加 → D1 数据库**
 3. 变量名称填 `DB`（必须一模一样，大写），选择刚建的 `sms-gateway-db`
 4. 点 **部署/保存**
@@ -76,7 +76,7 @@
 
 ## 第六步：设置定时清理任务
 
-1. Worker → **设置 → 触发事件 → Cron 触发器**
+1. Worker → **设置 → 触发器（Triggers）→ Cron 触发器**
 2. 点 **添加 Cron 触发器**，填 `0 17 * * *`，保存
 3. 含义：每天 UTC 17:00（北京时间凌晨 1 点）自动删除超过保留天数的数据
 
@@ -108,12 +108,12 @@ curl "https://<域名>/api/receive?token=<RECEIVE_TOKEN>" -H "Content-Type: appl
 在本目录（含 `wrangler.toml`，`main` 已指向本目录 `worker.js`）执行：
 
 ```bash
-npm install -g wrangler
-wrangler login
-wrangler d1 execute sms-gateway-db --file=schema.sql --remote
-wrangler secret put RECEIVE_TOKEN
-wrangler secret put ADMIN_PASSWORD   # 仅开登录时需要
-wrangler deploy
+npm install wrangler        # 官方推荐项目内安装；全局 npm install -g wrangler 亦可
+npx wrangler login
+npx wrangler d1 execute sms-gateway-db --file=schema.sql --remote
+npx wrangler secret put RECEIVE_TOKEN
+npx wrangler secret put ADMIN_PASSWORD   # 仅开登录时需要
+npx wrangler deploy
 ```
 
 ## 注意事项与常见问题
