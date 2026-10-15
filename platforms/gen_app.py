@@ -8,13 +8,17 @@
                                 仅把 Worker 专属的 export default 替换为通用导出
                                 fetchApp / runCron / handleCronRequest
   2. platforms/<平台>/app.js  — 各平台独立副本（vercel / netlify / deno / edgeone / node）
-  3. platforms/<平台>/db.js   — 各平台独立副本（源：platforms/shared/db.js）
+  3. platforms/<平台>/db.js   — 各平台独立副本（源：platforms/shared/db.js；
+                                node 除外——node/db.js 为 Turso + 本地 SQLite 双适配，独立维护）
   4. platforms/<平台>/schema.sql — 建表脚本副本（源：仓库根 schema.sql）
   5. platforms/cloudflare/{worker.js, schema.sql} — Cloudflare 主版本独立副本
      （worker.js 与 src/worker.js 逐字节一致；wrangler.toml 为本目录静态文件，不参与同步）
+  6. 各平台入口文件内的 ENV_KEYS 白名单块 — 渠道/站点环境变量统一清单，
+     由本脚本的 ENV_KEYS 列表生成（保证六平台透传的变量集合一致，防漂移）
 
 各平台目录因此完全自包含：入口文件只引用本目录内的 app.js / db.js，可独立部署、
-互不依赖。src/worker.js、shared/db.js 或根 schema.sql 有更新后重新执行本脚本即可全量同步。
+互不依赖。src/worker.js、shared/db.js、根 schema.sql 或本脚本 ENV_KEYS 有更新后
+重新执行本脚本即可全量同步。
 
 用法：python platforms/gen_app.py
 """
@@ -27,6 +31,54 @@ SRC = REPO_ROOT / "src" / "worker.js"
 SHARED_DIR = REPO_ROOT / "platforms" / "shared"
 SHARED_APP = SHARED_DIR / "app.js"
 PLATFORM_DIRS = ["vercel", "netlify", "deno", "edgeone", "node"]
+# node/db.js 为 Turso + 本地 SQLite 双适配（独立维护），不从 shared/db.js 同步
+DB_SYNC_DIRS = ["vercel", "netlify", "deno", "edgeone"]
+
+# 入口文件清单：相对 platforms/ 的路径（netlify 有 api 与 cron 两个入口，均需 ENV_KEYS）
+ENTRY_FILES = [
+    "vercel/api/[[...route]].js",
+    "netlify/functions/api.mjs",
+    "netlify/functions/cron.mjs",
+    "deno/main.js",
+    "edgeone/functions/[[default]].js",
+    "node/server.mjs",
+]
+
+# 渠道/站点环境变量白名单（唯一清单）：与 src/worker.js 实际读取的变量一一对应。
+# 数据库层变量（TURSO_DATABASE_URL / TURSO_AUTH_TOKEN / SQLITE_PATH）不在此列，
+# 由各入口 buildEnv 的数据库分支单独处理。
+ENV_KEYS = [
+    "RECEIVE_TOKEN",
+    "ENABLE_AUTH",
+    "ADMIN_PASSWORD",
+    "RETENTION_DAYS",
+    "SITE_NAME",
+    "SITE_ICON",
+    "FEISHU_WEBHOOK",
+    "FEISHU_SECRET",
+    "WECOM_WEBHOOK",
+    "DINGTALK_WEBHOOK",
+    "DINGTALK_SECRET",
+    "SERVERCHAN_SENDKEY",
+    "PUSHPLUS_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "BARK_DEVICE_KEY",
+    "BARK_URL",
+    "NTFY_URL",
+    "NTFY_TOKEN",
+    "GOTIFY_URL",
+    "GOTIFY_TOKEN",
+    "RESEND_API_KEY",
+    "MAIL_TO",
+    "MAIL_FROM",
+    "GENERIC_WEBHOOKS",
+    "GENERIC_WEBHOOK_TEMPLATE",
+    "GENERIC_WEBHOOK_HEADERS",
+]
+
+ENV_BEGIN = "/* ==== ENV_KEYS BEGIN（由 platforms/gen_app.py 同步，勿手工修改）==== */"
+ENV_END = "/* ==== ENV_KEYS END ==== */"
 
 FETCH_SIG = "async fetch(request, env, ctx) {"
 SCHED_SIG = "async scheduled(event, env) {"
@@ -106,6 +158,32 @@ def generate_shared_app(text: str) -> str:
     return out
 
 
+def env_keys_block() -> str:
+    """生成入口文件内的 ENV_KEYS 白名单代码块（含首尾标记）。"""
+    items = "\n".join('  "%s",' % k for k in ENV_KEYS)
+    return "%s\nconst ENV_KEYS = [\n%s\n];\n%s" % (ENV_BEGIN, items, ENV_END)
+
+
+def sync_entry_env_keys() -> None:
+    """把 ENV_KEYS 白名单同步到各平台入口文件的标记块内（缺失标记块即报错）。"""
+    block = env_keys_block()
+    for rel in ENTRY_FILES:
+        path = REPO_ROOT / "platforms" / rel
+        text = path.read_text(encoding="utf-8")
+        if ENV_BEGIN not in text or ENV_END not in text:
+            print("ENV_KEYS 标记块缺失: %s" % rel, file=sys.stderr)
+            sys.exit(1)
+        b0 = text.index(ENV_BEGIN)
+        b1 = text.index(ENV_END) + len(ENV_END)
+        out = text[:b0] + block + text[b1:]
+        path.write_text(out, encoding="utf-8", newline="\n")
+        ok = (path.read_text(encoding="utf-8") == out) and (out.count("const ENV_KEYS = [") == 1)
+        if not ok:
+            print("ENV_KEYS 同步校验失败: %s" % rel, file=sys.stderr)
+            sys.exit(1)
+        print("[ok] 同步 ENV_KEYS 白名单 %s" % rel)
+
+
 def sync_platforms(shared_app_text: str, db_text: str) -> None:
     """把唯一源同步为各平台目录内的独立副本（各平台目录因此自包含）。"""
     schema_text = (REPO_ROOT / "schema.sql").read_text(encoding="utf-8")
@@ -113,15 +191,18 @@ def sync_platforms(shared_app_text: str, db_text: str) -> None:
         d = REPO_ROOT / "platforms" / name
         d.mkdir(parents=True, exist_ok=True)
         (d / "app.js").write_text(shared_app_text, encoding="utf-8", newline="\n")
-        (d / "db.js").write_text(db_text, encoding="utf-8", newline="\n")
         (d / "schema.sql").write_text(schema_text, encoding="utf-8", newline="\n")
+        if name in DB_SYNC_DIRS:
+            (d / "db.js").write_text(db_text, encoding="utf-8", newline="\n")
         ok = (d / "app.js").read_text(encoding="utf-8") == shared_app_text and \
-             (d / "db.js").read_text(encoding="utf-8") == db_text and \
              (d / "schema.sql").read_text(encoding="utf-8") == schema_text
+        if name in DB_SYNC_DIRS:
+            ok = ok and (d / "db.js").read_text(encoding="utf-8") == db_text
         if not ok:
             print("同步校验失败: %s" % name, file=sys.stderr)
             sys.exit(1)
-        print("[ok] 同步独立副本 %s/{app.js,db.js,schema.sql}" % name)
+        db_note = "{app.js,db.js,schema.sql}" if name in DB_SYNC_DIRS else "{app.js,schema.sql}（db.js 独立维护）"
+        print("[ok] 同步独立副本 %s/%s" % (name, db_note))
 
 
 def sync_cloudflare(schema_text: str) -> None:
@@ -145,6 +226,7 @@ def main() -> int:
     db_text = (SHARED_DIR / "db.js").read_text(encoding="utf-8")
     sync_platforms(shared_app_text, db_text)
     sync_cloudflare((REPO_ROOT / "schema.sql").read_text(encoding="utf-8"))
+    sync_entry_env_keys()
     return 0
 
 

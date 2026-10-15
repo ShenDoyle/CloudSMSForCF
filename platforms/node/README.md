@@ -2,7 +2,7 @@
 
 把 SMSToWeb 以 Docker 容器方式自托管。进程常驻、无函数时长限制，长轮询实时性最佳，适合有现成服务器或想用 Fly.io/Railway 免费额度的用户。
 
-**本目录文件**：`server.mjs`（Node 18+ 零依赖入口，含内置每日清理）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）、`Dockerfile`、`package.json`。
+**本目录文件**：`server.mjs`（Node 18+ 零依赖入口，含内置每日清理）、`app.js`（核心应用）、`db.js`（Turso / 本地 SQLite 双模式适配层）、`schema.sql`（建表）、`Dockerfile`、`package.json`。
 
 ---
 
@@ -70,16 +70,17 @@ docker run -d --name smstoweb --restart unless-stopped -p 8787:8787 \
 curl "http://127.0.0.1:8787/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"content\":\"VPS 部署成功\"}"
 ```
 
-建议用 Caddy/Nginx 反代加 HTTPS。不用 Docker 也可以直接 `node server.mjs`（需 Node 18+，零 npm 依赖）。
+建议用 Caddy/Nginx 反代加 HTTPS。不用 Docker 也可以直接 `node server.mjs`（需 Node 18+，零 npm 依赖；本地 SQLite 模式需 Node 22.13+）。
 
 ## 环境变量（三种方式通用）
 
 | 名称 | 值 | 说明 |
 |---|---|---|
-| `TURSO_DATABASE_URL` | `libsql://sms-gateway-xxxx.turso.io` | 第一步记下的 URL |
-| `TURSO_AUTH_TOKEN` | （第一步的令牌） | 只显示一次的那个 |
+| `SQLITE_PATH`（可选） | 如 `/data/data.db` | **本地 SQLite 模式**：设置后免外部数据库，数据存本地文件（需 Node 22.13+，首次启动自动建表；与 Turso 二选一，设置后优先） |
+| `TURSO_DATABASE_URL` | `libsql://sms-gateway-xxxx.turso.io` | Turso 模式：第一步记下的 URL |
+| `TURSO_AUTH_TOKEN` | （第一步的令牌） | Turso 模式：只显示一次的那个 |
 | `RECEIVE_TOKEN` | 自己编的长随机串 | 推送鉴权，勿用示例值 |
-| `ENABLE_AUTH` | `false` | 要登录改 `true` |
+| `ENABLE_AUTH` | `false` | 要登录改 `true`（**安全强烈建议开启**：管理页承载短信验证码等敏感内容，默认免登录意味着知道域名即可查看全部消息） |
 | `ADMIN_PASSWORD` | 自己编的密码 | 仅 `ENABLE_AUTH="true"` 时需要 |
 | `RETENTION_DAYS` | `30` | 数据保留天数 |
 | `PORT` | 默认 `8787` | 一般无需设置（Railway 自动注入） |
@@ -105,5 +106,6 @@ curl "http://127.0.0.1:8787/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: ap
 - **定时清理**：进程内置每天 UTC 17:00（北京 01:00）自动清理，无需配置。也可改用平台调度器（Fly Machines Cron / Railway Cron）调 `GET /api/cron?token=<RECEIVE_TOKEN>`，二选一
 - **常驻进程优势**：无函数时长上限，`/api/wait` 长轮询与 Cloudflare Worker 体验一致，实时性最好
 - **免费额度**：Fly.io 免费额度已改为按量计费（新账号需绑卡，微用量基本免费）；Railway 提供一次性试用额度，之后按用量计费——长期零成本首选 Cloudflare 主版本
-- **数据备份**：数据都在 Turso，换服务器只需重新配好环境变量，数据无损
+- **数据备份**：Turso 模式下数据都在 Turso，换服务器只需重新配好环境变量，数据无损；本地 SQLite 模式定期备份 `SQLITE_PATH` 文件即可
+- **登录保护**：登录接口已内置限速——同一 IP 连续失败 5 次锁定 10 分钟（内存态，进程重启即清零）
 - **日志排查**：`fly logs` / Railway Deployments → Logs / `docker logs smstoweb`

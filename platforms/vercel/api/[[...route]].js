@@ -17,7 +17,39 @@ export const config = { runtime: "edge" };
 
 let cachedDb = null;
 
-/* 环境变量 → 核心应用 env 对象（Turso 连接实例在进程内缓存复用） */
+/* ==== ENV_KEYS BEGIN（由 platforms/gen_app.py 同步，勿手工修改）==== */
+const ENV_KEYS = [
+  "RECEIVE_TOKEN",
+  "ENABLE_AUTH",
+  "ADMIN_PASSWORD",
+  "RETENTION_DAYS",
+  "SITE_NAME",
+  "SITE_ICON",
+  "FEISHU_WEBHOOK",
+  "FEISHU_SECRET",
+  "WECOM_WEBHOOK",
+  "DINGTALK_WEBHOOK",
+  "DINGTALK_SECRET",
+  "SERVERCHAN_SENDKEY",
+  "PUSHPLUS_TOKEN",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_CHAT_ID",
+  "BARK_DEVICE_KEY",
+  "BARK_URL",
+  "NTFY_URL",
+  "NTFY_TOKEN",
+  "GOTIFY_URL",
+  "GOTIFY_TOKEN",
+  "RESEND_API_KEY",
+  "MAIL_TO",
+  "MAIL_FROM",
+  "GENERIC_WEBHOOKS",
+  "GENERIC_WEBHOOK_TEMPLATE",
+  "GENERIC_WEBHOOK_HEADERS",
+];
+/* ==== ENV_KEYS END ==== */
+
+/* 环境变量 → 核心应用 env 对象（白名单循环透传；Turso 连接实例在进程内缓存复用） */
 function buildEnv() {
   if (!cachedDb) {
     cachedDb = createTursoDb({
@@ -25,16 +57,9 @@ function buildEnv() {
       TURSO_AUTH_TOKEN: process.env.TURSO_AUTH_TOKEN || "",
     });
   }
-  return {
-    DB: cachedDb,
-    RECEIVE_TOKEN: process.env.RECEIVE_TOKEN || "",
-    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "",
-    ENABLE_AUTH: process.env.ENABLE_AUTH || "",
-    RETENTION_DAYS: process.env.RETENTION_DAYS || "",
-    FEISHU_WEBHOOK: process.env.FEISHU_WEBHOOK || "",
-    SITE_NAME: process.env.SITE_NAME || "",
-    SITE_ICON: process.env.SITE_ICON || "",
-  };
+  const env = { DB: cachedDb };
+  for (const k of ENV_KEYS) env[k] = process.env[k] || "";
+  return env;
 }
 
 function configError(e) {

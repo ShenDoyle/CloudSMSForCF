@@ -24,7 +24,7 @@
  *   SITE_NAME        — 网站名（可选）：管理页标题/页头，默认「短信网关」
  *   SITE_ICON        — 网站图标 URL（可选）：默认 jsdelivr favicon；设置了但加载失败自动回退默认
  *   （Secret）RECEIVE_TOKEN   — 推送鉴权（/api/receive 与 /api/push 共用）
- *   （Secret）ADMIN_PASSWORD  — 登录密码（仅 ENABLE_AUTH="true" 时需要）
+ *   （Secret）ADMIN_PASSWORD  — 登录密码（仅 ENABLE_AUTH="true" 时需要；登录连续失败 5 次锁 10 分钟）
  */
 
 const CORS = {
@@ -123,12 +123,53 @@ async function isAuthed(request, env) {
   return getCookie(request, AUTH_COOKIE) === (await authCookieValue(env.ADMIN_PASSWORD));
 }
 
+/* 登录限速（简单内存态，实例重启即清零；Serverless 多实例下为尽力而为的软限制）：
+ * 同一 IP 连续失败 LOGIN_FAIL_LIMIT 次后，锁定 LOGIN_LOCK_MS 时长内拒绝登录尝试 */
+const LOGIN_FAIL_LIMIT = 5;
+const LOGIN_LOCK_MS = 10 * 60 * 1000;
+const loginFails = new Map(); /* ip -> { count, lockedUntil } */
+
+function clientIp(request) {
+  return (request.headers.get("CF-Connecting-IP")
+    || (request.headers.get("X-Forwarded-For") || "").split(",")[0].trim()
+    || "unknown");
+}
+
+function loginLocked(request) {
+  const ip = clientIp(request);
+  const rec = loginFails.get(ip);
+  if (!rec) return false;
+  if (rec.lockedUntil > Date.now()) return true;
+  if (rec.lockedUntil) loginFails.delete(ip); /* 仅在曾锁定且已过期时清零重来（未锁定记录保留计数） */
+  return false;
+}
+
+function recordLoginFail(request) {
+  const ip = clientIp(request);
+  const rec = loginFails.get(ip) || { count: 0, lockedUntil: 0 };
+  rec.count += 1;
+  if (rec.count >= LOGIN_FAIL_LIMIT) {
+    rec.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+    rec.count = 0;
+  }
+  loginFails.set(ip, rec);
+  if (loginFails.size > 1000) { /* 防 Map 无限膨胀：清理已过期条目 */
+    const now = Date.now();
+    for (const [k, v] of loginFails) if (v.lockedUntil <= now) loginFails.delete(k);
+  }
+}
+
 async function handleLogin(request, env) {
   if (!authEnabled(env) || !env.ADMIN_PASSWORD) return json({ success: false, error: "auth disabled" }, 400);
+  if (loginLocked(request)) return json({ success: false, error: "too many attempts" }, 429);
   let body;
   try { body = await request.json(); } catch { return json({ success: false, error: "invalid json" }, 400); }
   const pw = body && body.password !== undefined ? String(body.password) : "";
-  if (!pw || !safeEqual(pw, env.ADMIN_PASSWORD)) return json({ success: false, error: "wrong password" }, 403);
+  if (!pw || !safeEqual(pw, env.ADMIN_PASSWORD)) {
+    recordLoginFail(request);
+    return json({ success: false, error: "wrong password" }, 403);
+  }
+  clearLoginFail(request);
   const token = await authCookieValue(env.ADMIN_PASSWORD);
   return new Response(JSON.stringify({ success: true }), {
     headers: {
@@ -138,6 +179,8 @@ async function handleLogin(request, env) {
     },
   });
 }
+
+function clearLoginFail(request) { loginFails.delete(clientIp(request)); }
 
 function handleLogout() {
   return new Response(JSON.stringify({ success: true }), {
@@ -1158,7 +1201,9 @@ const LOGIN_HTML = String.raw`<!DOCTYPE html>
       body: JSON.stringify({ password: pw.value })
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d && d.success) { location.reload(); return; }
-      err.textContent = d && d.error === "wrong password" ? "密码错误" : "登录失败";
+      err.textContent = d && d.error === "wrong password" ? "密码错误"
+        : d && d.error === "too many attempts" ? "尝试次数过多，请 10 分钟后再试"
+        : "登录失败";
     }).catch(function () { err.textContent = "网络错误"; });
   }
   document.getElementById("go").onclick = tryLogin;

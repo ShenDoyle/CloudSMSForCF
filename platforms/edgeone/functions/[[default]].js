@@ -14,7 +14,39 @@ import { createTursoDb } from "../db.js";
 
 let cachedDb = null;
 
-/* EdgeOne 环境变量通过 onRequest 的 env 参数注入（对象形式） */
+/* ==== ENV_KEYS BEGIN（由 platforms/gen_app.py 同步，勿手工修改）==== */
+const ENV_KEYS = [
+  "RECEIVE_TOKEN",
+  "ENABLE_AUTH",
+  "ADMIN_PASSWORD",
+  "RETENTION_DAYS",
+  "SITE_NAME",
+  "SITE_ICON",
+  "FEISHU_WEBHOOK",
+  "FEISHU_SECRET",
+  "WECOM_WEBHOOK",
+  "DINGTALK_WEBHOOK",
+  "DINGTALK_SECRET",
+  "SERVERCHAN_SENDKEY",
+  "PUSHPLUS_TOKEN",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_CHAT_ID",
+  "BARK_DEVICE_KEY",
+  "BARK_URL",
+  "NTFY_URL",
+  "NTFY_TOKEN",
+  "GOTIFY_URL",
+  "GOTIFY_TOKEN",
+  "RESEND_API_KEY",
+  "MAIL_TO",
+  "MAIL_FROM",
+  "GENERIC_WEBHOOKS",
+  "GENERIC_WEBHOOK_TEMPLATE",
+  "GENERIC_WEBHOOK_HEADERS",
+];
+/* ==== ENV_KEYS END ==== */
+
+/* EdgeOne 环境变量通过 onRequest 的 env 参数注入（对象形式，白名单循环透传） */
 function buildEnv(vars) {
   const g = function (k) {
     return vars && vars[k] != null ? String(vars[k]) : "";
@@ -25,16 +57,9 @@ function buildEnv(vars) {
       TURSO_AUTH_TOKEN: g("TURSO_AUTH_TOKEN"),
     });
   }
-  return {
-    DB: cachedDb,
-    RECEIVE_TOKEN: g("RECEIVE_TOKEN"),
-    ADMIN_PASSWORD: g("ADMIN_PASSWORD"),
-    ENABLE_AUTH: g("ENABLE_AUTH"),
-    RETENTION_DAYS: g("RETENTION_DAYS"),
-    FEISHU_WEBHOOK: g("FEISHU_WEBHOOK"),
-    SITE_NAME: g("SITE_NAME"),
-    SITE_ICON: g("SITE_ICON"),
-  };
+  const e = { DB: cachedDb };
+  for (const k of ENV_KEYS) e[k] = g(k);
+  return e;
 }
 
 function configError(e) {
