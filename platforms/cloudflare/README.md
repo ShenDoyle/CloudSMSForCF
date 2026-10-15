@@ -59,17 +59,17 @@
 
 | 渠道 | 变量 | 说明 |
 |---|---|---|
-| 飞书群机器人 | `FEISHU_WEBHOOK` | 群机器人 Webhook 地址 |
+| 飞书群机器人 | `FEISHU_WEBHOOK`（可选 `FEISHU_SECRET`） | 群机器人 Webhook 地址；安全设置选「签名校验」时另配 `FEISHU_SECRET` |
 | 企业微信群机器人 | `WECOM_WEBHOOK` | 群机器人 Webhook 地址 |
 | 钉钉群机器人 | `DINGTALK_WEBHOOK`（可选 `DINGTALK_SECRET`） | 加签安全设置时需配 `DINGTALK_SECRET` |
 | Server酱 | `SERVERCHAN_SENDKEY` | SendKey（微信推送） |
 | PushPlus | `PUSHPLUS_TOKEN` | 令牌（微信推送） |
 | Telegram Bot | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Bot 令牌 + 会话/群 ID |
 | Bark | `BARK_DEVICE_KEY`（可选 `BARK_URL`） | 自建服务器时配 `BARK_URL`，默认官方 |
-| ntfy | `NTFY_URL` | 完整主题 URL，如 `https://ntfy.sh/my-sms` |
+| ntfy | `NTFY_URL`（可选 `NTFY_TOKEN`） | 完整主题 URL，如 `https://ntfy.sh/my-sms`；受保护主题另配 `NTFY_TOKEN`（Token 或 user:password） |
 | Gotify | `GOTIFY_URL` + `GOTIFY_TOKEN` | 服务器地址（不含 `/message`）+ 应用令牌 |
 | 邮件（Resend） | `RESEND_API_KEY` + `MAIL_TO`（可选 `MAIL_FROM`） | `MAIL_FROM` 默认 `onboarding@resend.dev` |
-| 通用 Webhook | `GENERIC_WEBHOOKS`（可选 `GENERIC_WEBHOOK_TEMPLATE`） | 逗号分隔多个 URL；模板可自定义请求体，第三方 API（短信网关等）由此接入 |
+| 通用 Webhook | `GENERIC_WEBHOOKS`（可选 `GENERIC_WEBHOOK_TEMPLATE` / `GENERIC_WEBHOOK_HEADERS`） | 逗号分隔多个 URL；模板自定义请求体、请求头 JSON，第三方 API（短信网关等）由此接入 |
 
 各渠道的申请与获取步骤、请求体格式，见 [多平台接入部署指南 · 通知转发渠道](../../docs/多平台接入部署指南.md)。
 多渠道并发转发、单渠道失败不影响其他渠道与消息入库；重复消息（`duplicated`）不会重复转发。

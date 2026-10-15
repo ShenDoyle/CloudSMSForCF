@@ -11,12 +11,15 @@
  *   RETENTION_DAYS   — 数据保留天数，默认 30（每天 UTC 17:00 定时清理）
  *   ENABLE_AUTH      — 管理页登录开关："true" 需密码登录，"false" 免登录（默认）
  *   通知转发（可选，多渠道并发；配置哪个渠道变量就转发哪个，全部未配置则不转发）：
- *     FEISHU_WEBHOOK / WECOM_WEBHOOK / DINGTALK_WEBHOOK(+DINGTALK_SECRET) — 飞书 / 企业微信 / 钉钉群机器人
+ *     FEISHU_WEBHOOK(+可选 FEISHU_SECRET 签名校验) / WECOM_WEBHOOK / DINGTALK_WEBHOOK(+DINGTALK_SECRET 加签)
+ *       — 飞书 / 企业微信 / 钉钉群机器人
  *     SERVERCHAN_SENDKEY / PUSHPLUS_TOKEN — Server酱 / PushPlus
  *     TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID — Telegram Bot
- *     BARK_DEVICE_KEY(+BARK_URL，默认官方) / NTFY_URL / GOTIFY_URL + GOTIFY_TOKEN — Bark / ntfy / Gotify
+ *     BARK_DEVICE_KEY(+BARK_URL，默认官方) / NTFY_URL(+NTFY_TOKEN 受保护主题) / GOTIFY_URL + GOTIFY_TOKEN
+ *       — Bark / ntfy / Gotify
  *     RESEND_API_KEY + MAIL_TO(+MAIL_FROM) — 邮件（Resend）
- *     GENERIC_WEBHOOKS（逗号分隔多 URL，可选 GENERIC_WEBHOOK_TEMPLATE 自定义请求体）— 通用 Webhook，
+ *     GENERIC_WEBHOOKS（逗号分隔多 URL，可选 GENERIC_WEBHOOK_TEMPLATE 自定义请求体、
+ *       GENERIC_WEBHOOK_HEADERS 自定义请求头 JSON，如 {"Authorization":"Bearer xxx"}）— 通用 Webhook，
  *     第三方 API（短信网关等）均由此接入
  *   SITE_NAME        — 网站名（可选）：管理页标题/页头，默认「短信网关」
  *   SITE_ICON        — 网站图标 URL（可选）：默认 jsdelivr favicon；设置了但加载失败自动回退默认
@@ -212,11 +215,14 @@ function normalizeTime(t) {
  *   PushPlus    PUSHPLUS_TOKEN
  *   Telegram    TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
  *   Bark        BARK_DEVICE_KEY（可选 BARK_URL，默认官方 https://api.day.app）
- *   ntfy        NTFY_URL（完整主题 URL，如 https://ntfy.sh/my-sms）
+ *   ntfy        NTFY_URL（完整主题 URL，如 https://ntfy.sh/my-sms；JSON 发布支持中文标题；
+ *               受保护主题可选 NTFY_TOKEN：值含「:」按 Basic user:password 发送，否则按 Access Token 走 Bearer）
  *   Gotify      GOTIFY_URL + GOTIFY_TOKEN
  *   邮件        RESEND_API_KEY + MAIL_TO（可选 MAIL_FROM，默认 onboarding@resend.dev）
  *   通用        GENERIC_WEBHOOKS（逗号分隔多个 URL；可选 GENERIC_WEBHOOK_TEMPLATE 自定义请求体，
- *               占位符 {{title}}/{{content}}/{{time}}/{{source}}/{{sender}}/{{device}}）
+ *               占位符 {{title}}/{{content}}/{{time}}/{{source}}/{{sender}}/{{device}}；
+ *               可选 GENERIC_WEBHOOK_HEADERS 自定义请求头，JSON 对象字符串，
+ *               如 {"Authorization":"Bearer xxx","X-Api-Key":"yyy"}）
  */
 
 /* UTC 时间串 → 北京时间串（用于通知消息展示） */
@@ -264,7 +270,16 @@ function dispatchNotify(env, msg) {
 
   const feishu = t(env.FEISHU_WEBHOOK);
   if (feishu) jobs.push(async function () {
-    await postNotify(feishu, null, JSON.stringify({ msg_type: "text", content: { text: text } }));
+    const payload = { msg_type: "text", content: { text: text } };
+    const feishuSecret = t(env.FEISHU_SECRET);
+    if (feishuSecret) {
+      /* 飞书签名校验（机器人安全设置选「签名校验」时必配）：
+         sign = base64(HMAC-SHA256(key = timestamp + "\n" + secret, message = ""))，timestamp 为秒级 */
+      const ts = Math.floor(Date.now() / 1000);
+      payload.timestamp = String(ts);
+      payload.sign = await hmacSha256Base64(ts + "\n" + feishuSecret, "");
+    }
+    await postNotify(feishu, null, JSON.stringify(payload));
   });
 
   const wecom = t(env.WECOM_WEBHOOK);
@@ -315,7 +330,21 @@ function dispatchNotify(env, msg) {
 
   const ntfy = t(env.NTFY_URL);
   if (ntfy) jobs.push(async function () {
-    await postNotify(ntfy, { Title: msg.title }, text);
+    /* ntfy 用 JSON 发布模式（HTTP 头值仅限 Latin1，中文标题走 Title 头会被 fetch 拒绝）。
+       NTFY_URL 为完整主题 URL：topic 取路径最后一段，POST 到其父目录（兼容根路径与反代子路径部署）；
+       受保护主题可选 NTFY_TOKEN：值含「:」视为 user:password 走 Basic，否则按 Access Token 走 Bearer */
+    const u = new URL(ntfy);
+    const path = u.pathname.replace(/\/+$/, "");
+    const slash = path.lastIndexOf("/");
+    const topic = decodeURIComponent(path.slice(slash + 1));
+    if (!topic) throw new Error("NTFY_URL 需为完整主题 URL（如 https://ntfy.sh/my-topic）");
+    const ntfyHeaders = { "Content-Type": "application/json" };
+    const ntfyTok = t(env.NTFY_TOKEN);
+    if (ntfyTok) {
+      ntfyHeaders.Authorization = ntfyTok.indexOf(":") !== -1 ? "Basic " + btoa(ntfyTok) : "Bearer " + ntfyTok;
+    }
+    await postNotify(u.origin + path.slice(0, slash + 1), ntfyHeaders,
+      JSON.stringify({ topic: topic, title: msg.title, message: text }));
   });
 
   const gotifyUrl = t(env.GOTIFY_URL), gotifyToken = t(env.GOTIFY_TOKEN);
@@ -357,8 +386,20 @@ function dispatchNotify(env, msg) {
       }
       try { JSON.parse(genericBody); } catch (e) { genericCt = "text/plain"; }
     }
+    /* 可选自定义请求头：GENERIC_WEBHOOK_HEADERS 为 JSON 对象字符串，如 {"Authorization":"Bearer xxx"}；
+       解析失败忽略该配置（仅用默认头），不影响转发。显式指定的 Content-Type 优先于默认值 */
+    const genericHeaders = { "Content-Type": genericCt };
+    const hdrRaw = t(env.GENERIC_WEBHOOK_HEADERS);
+    if (hdrRaw) {
+      try {
+        const parsed = JSON.parse(hdrRaw);
+        for (const k of Object.keys(parsed)) genericHeaders[k] = String(parsed[k]);
+      } catch (e) {
+        console.error("GENERIC_WEBHOOK_HEADERS 需为 JSON 对象字符串，解析失败已忽略:", e && e.message);
+      }
+    }
     for (const u of genericUrls) {
-      jobs.push(async function () { await postNotify(u, { "Content-Type": genericCt }, genericBody); });
+      jobs.push(async function () { await postNotify(u, genericHeaders, genericBody); });
     }
   }
 
@@ -777,20 +818,62 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
     var yr = v.year === now.year ? "" : v.year + "年";
     return yr + Number(v.pmonth) + "月" + Number(v.pday) + "日";
   }
-  /* 验证码提取：仅当短信含验证码类关键词时提取（数字码 / 字母数字混合码），否则返回空 */
+  /* 验证码提取（级联策略，借鉴 SmsForwarder 关键词集 / otp-message-extractor 防误报 / expo-sms-listener 级联）：
+     ① 关键词在前+分隔码(123-456/取件码) → ② 关键词在前+数字码 → ③ 码在前(123456是您的验证码)
+     → ④ Google 风格(G-123456) → ⑤ 字母数字混合码 → ⑥ 全文唯一数字组兜底。
+     匹配前剥离手机号/日期/时间/金额/单号等干扰数字；仅当短信含验证码类关键词才提取。 */
   function extractCode(text) {
-    var s = String(text || "");
-    var kw = "验证码|校验码|确认码|动态码|授权码|随机码|取件码|提货码|code|otp";
-    var m = s.match(new RegExp("(?:" + kw + ")[^0-9]{0,12}([0-9]{4,8})(?![0-9])", "i"));
-    if (m) return m[1];
-    m = s.match(new RegExp("(?:" + kw + ")[^0-9A-Za-z]{0,4}([0-9A-Za-z]{4,8})(?![0-9A-Za-z])", "i"));
-    if (m && /[0-9]/.test(m[1]) && /[A-Za-z]/.test(m[1])) return m[1];
-    /* Google 风格：码在关键词之前，如「G-383838 是您的 Google 验证码」 */
-    if (new RegExp("(?:" + kw + ")").test(s)) {
-      m = s.match(/\b[A-Z]{1,3}-(\d{4,8})(?![0-9])/i);
-      if (m) return m[1];
+    var s = String(text || "").replace(/\s+/g, " ");
+    var kw = "验证码|校验码|检验码|确认码|激活码|动态码|动态密码|动态口令|授权码|安全码|随机码|认证码|取件码|提货码|登录码|驗證碼|校驗碼|認證碼|verification code|security code|confirmation code|access code|auth code|login code|one[- ]time code|passcode|pass code|2fa|otp|code";
+    if (!new RegExp("(?:" + kw + ")", "i").test(s)) return "";
+    /* 剥离干扰数字：手机号 / 日期 / 时间 / 金额 / 各类编号，防止误报 */
+    var t = s
+      .replace(/1[3-9][0-9]{9}/g, " ")
+      .replace(/[0-9]{4}[-/年.][0-9]{1,2}[-/月.][0-9]{1,2}日?/g, " ")
+      .replace(/[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?/g, " ")
+      .replace(/(?:[¥￥$]|EUR|USD)\s*[0-9]+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?\s*(?:元|块钱|人民币)/g, " ")
+      .replace(/(?:订单|工单|账单|流水号|交易号|单号|卡号|尾号|工号|房号|编号|合同号|批次号|快递单号)[:：号\s]*[0-9]+/g, " ");
+    /* 捕获组左右两侧不得紧贴数字（避免从长数字串内部截取） */
+    function hit(re) {
+      var r = re.exec(t);
+      if (!r) return null;
+      var a = r.index + r[0].length - r[1].length;
+      var b = a + r[1].length;
+      if (a > 0 && /[0-9]/.test(t.charAt(a - 1))) return null;
+      if (b < t.length && /[0-9]/.test(t.charAt(b))) return null;
+      return r[1];
     }
-    return "";
+    var m;
+    /* ① 关键词在前 + 分隔式数字：123-456 / 1234 5678 / 8-2-307 取件码风格（先于纯数字，防被截断） */
+    m = hit(new RegExp("(?:" + kw + ")[^0-9]{0,12}([0-9]{1,4}(?:[- ][0-9]{1,4}){1,2})", "i"));
+    if (m) return m.replace(/[- ]/g, "");
+    /* ② 关键词在前 + 纯数字 4-8 位 */
+    m = hit(new RegExp("(?:" + kw + ")[^0-9]{0,12}([0-9]{4,8})", "i"));
+    if (m) return m;
+    /* ③ 码在前：123456是您的验证码 / 123456 为动态口令（限 8 字内衔接，防跨句误报） */
+    m = hit(new RegExp("([0-9]{4,8})[^0-9]{0,8}(?:您的|你的)?(?:" + kw + ")", "i"));
+    if (m) return m;
+    /* ④ Google 风格：G-383838 是您的 Google 验证码 */
+    m = hit(new RegExp("([A-Za-z]{1,3}-[0-9]{4,8})", "i"));
+    if (m) return m.split("-")[1];
+    /* ⑤ 字母数字混合 4-8 位（须同时含字母与数字；右侧不得紧贴字母数字） */
+    m = new RegExp("(?:" + kw + ")[^0-9A-Za-z]{0,4}([0-9A-Za-z]{4,8})", "i").exec(t);
+    if (m) {
+      var b5 = m.index + m[0].length;
+      if (b5 >= t.length || !/[0-9A-Za-z]/.test(t.charAt(b5))) {
+        if (/[0-9]/.test(m[1]) && /[A-Za-z]/.test(m[1])) return m[1];
+      }
+    }
+    /* ⑥ 兜底：剥离后全文恰好只有一组独立 4-8 位数字时才取（唯一性保证不误报） */
+    var re6 = /[0-9]{4,8}/g;
+    var lone = null, cnt = 0, r6;
+    while ((r6 = re6.exec(t))) {
+      var a6 = r6.index, b6 = a6 + r6[0].length;
+      if (a6 > 0 && /[0-9]/.test(t.charAt(a6 - 1))) continue;
+      if (b6 < t.length && /[0-9]/.test(t.charAt(b6))) continue;
+      cnt++; lone = r6[0];
+    }
+    return cnt === 1 ? lone : "";
   }
   /* 内容链接化：注意入参必须已经过 esc() 转义 */
   function linkify(escaped) {
