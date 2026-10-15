@@ -1,0 +1,85 @@
+# Vercel 部署教程
+
+把 SMSToWeb 部署到 Vercel（Edge Function + Turso 数据库）。免费额度足够个人使用，全程约 15 分钟。
+
+**本目录文件**：`api/[[...route]].js`（入口）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）、`vercel.json`（含定时任务配置）。
+
+---
+
+## 准备工作
+
+1. 一个 GitHub 账号（Vercel 通过 GitHub 仓库部署）
+2. 一个 Vercel 账号（[注册入口](https://vercel.com/signup)，直接用 GitHub 登录）
+
+## 第一步：准备代码仓库
+
+1. 打开项目 GitHub 仓库，点右上角 **Fork**（或用你自己已 Push 的仓库）
+2. Fork 完成，你就有了一份可自由修改的项目副本
+
+## 第二步：创建 Turso 数据库
+
+Turso 提供 SQLite 兼容数据库（免费额度：500 个数据库、每月 10 亿次行读取）。
+
+1. 打开 [turso.tech](https://turso.tech)，点 **Get Started**，用 GitHub 登录
+2. 进入控制台 → **Create Database**（创建数据库）：
+   - Name：`sms-gateway`
+   - Location：选离你近的区域（如 Singapore / Hong Kong）
+   - Type：Free
+3. 创建后进入数据库详情页：
+   - 记下 **Database URL**（形如 `libsql://sms-gateway-xxxx.turso.io`）
+   - 点 **Create Token**（或 Turso Platform Tokens）创建访问令牌，**立即复制保存**（只显示一次）
+4. 初始化表结构：数据库详情页 → **Console**（网页版 SQL 控制台）→ 把本目录 [`schema.sql`](schema.sql) 全部内容粘贴进去 → 执行 → 提示成功（创建 `messages` 和 `devices` 两张表）
+
+> 也可用 Turso CLI：`turso db create sms-gateway` → `turso db shell sms-gateway < schema.sql` → `turso db tokens create sms-gateway`。
+
+## 第三步：导入仓库到 Vercel
+
+1. 登录 [vercel.com](https://vercel.com) → **Add New → Project**
+2. 在 **Import Git Repository** 列表找到你 Fork 的仓库，点 **Import**
+3. 在配置页展开 **Root Directory**（根目录），选择 `platforms/vercel`
+   ——Vercel 会自动识别目录内的 `vercel.json` 和 `api/` 目录，无需其他配置
+4. 先不要急着点 Deploy，先做第四步的环境变量配置（在同一页面 **Environment Variables** 区添加）
+
+## 第四步：配置环境变量
+
+在部署配置页的 **Environment Variables** 中逐个添加（后续也可在 Project → Settings 里改）：
+
+| 名称 | 值 | 说明 |
+|---|---|---|
+| `TURSO_DATABASE_URL` | `libsql://sms-gateway-xxxx.turso.io` | 第二步记下的 URL |
+| `TURSO_AUTH_TOKEN` | （第二步的令牌） | 只显示一次的那个 |
+| `RECEIVE_TOKEN` | 自己编的长随机串 | 推送鉴权，勿用示例值 |
+| `ENABLE_AUTH` | `false` | 要登录改 `true` |
+| `ADMIN_PASSWORD` | 自己编的密码 | 仅 `ENABLE_AUTH="true"` 时需要 |
+| `RETENTION_DAYS` | `30` | 数据保留天数 |
+| `CRON_SECRET` | **与 RECEIVE_TOKEN 相同的值** | Vercel Cron 调 /api/cron 时自动附带 `Bearer $CRON_SECRET` |
+| `FEISHU_WEBHOOK` | （可选）飞书机器人 Webhook | 配置后新消息自动转发飞书群 |
+| `SITE_NAME` / `SITE_ICON` | （可选） | 网站名 / 图标 URL |
+
+全部填完点 **Deploy**，等待约 1 分钟部署完成。
+
+## 第五步：验证部署
+
+1. 部署完成页点 **Continue to Dashboard**，记下顶部分配的域名（形如 `https://xxx.vercel.app`）
+2. 浏览器打开该域名，应看到管理页（默认「短信网关」；开了登录则先见登录页）
+3. 验证推送接口（把 `<域名>` 和 `<密钥>` 换成你的）：
+
+```
+curl "https://<域名>/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: application/json" -d "{\"source\":\"notify\",\"sender\":\"deploy-test\",\"content\":\"Vercel 部署成功\"}"
+```
+
+返回 `{"success":true,...}` 即通，网页应立刻出现这条消息。
+
+## 第六步：接入手机端与设备
+
+按 [多平台接入部署指南](../../docs/多平台接入部署指南.md) 配置安卓 SmsForwarder（短信走 `/api/receive`）和各设备通知推送（走 `/api/push`），域名用你的 `xxx.vercel.app`（或绑定自定义域名）。
+
+绑定自定义域名：Project → **Settings → Domains** → Add，按提示去域名 DNS 加一条 CNAME 记录指向 `cname.vercel-dns.com`。
+
+## 注意事项与常见问题
+
+- **定时清理**：`vercel.json` 已配置每天 UTC 17:00（北京 01:00）调用 `/api/cron` 清理过期数据。Vercel Cron 会自动带 `Authorization: Bearer $CRON_SECRET`，所以 `CRON_SECRET` 必须与 `RECEIVE_TOKEN` 一致
+- **Hobby（免费）版限制**：cron 仅支持每天一次（本项目正好一天一次，满足）；Serverless 函数有执行时长上限，管理页长轮询 `/api/wait`（挂起 25 秒）可能被提前截断——前端会自动重试，**不影响功能**，仅新消息提醒稍不及时
+- **Edge Runtime**：入口已声明 `runtime = "edge"`，冷启动快、全球边缘节点执行
+- **部署失败排查**：多为环境变量漏填——缺 `TURSO_*` 会 500 且报 "config error"；检查 Root Directory 是否选对 `platforms/vercel`
+- **更新代码**：推送（push）到你 Fork 的仓库，Vercel 自动重新部署

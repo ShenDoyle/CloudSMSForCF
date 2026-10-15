@@ -1,5 +1,5 @@
 /**
- * CloudSMSForCF — Deno Deploy 入口
+ * SMSToWeb — Deno Deploy 入口
  * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
  * 直接部署本目录的 main.js 即可（见 platforms/README.md「Deno Deploy」）。
  *

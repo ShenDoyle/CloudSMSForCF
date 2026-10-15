@@ -1,5 +1,5 @@
 /**
- * CloudSMSForCF — Netlify Functions v2 入口（path "/*" 捕获全部路由）
+ * SMSToWeb — Netlify Functions v2 入口（path "/*" 捕获全部路由）
  * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
  * 直接把 netlify/ 作为 base 目录部署即可（见 platforms/README.md「Netlify」）。
  *

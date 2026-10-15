@@ -1,5 +1,5 @@
 /**
- * CloudSMSForCF — Vercel Edge Function 入口（catch-all：捕获全部路径）
+ * SMSToWeb — Vercel Edge Function 入口（catch-all：捕获全部路径）
  * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
  * 直接把 vercel/ 作为项目根目录部署即可（见 platforms/README.md「Vercel」）。
  *

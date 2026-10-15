@@ -1,5 +1,5 @@
 /**
- * CloudSMSForCF — Node.js 自托管入口（Node 18+，零 npm 依赖）
+ * SMSToWeb — Node.js 自托管入口（Node 18+，零 npm 依赖）
  * 适用：Fly.io / Railway / 任意 VPS / 本地调试。
  * 本目录自包含：app.js（核心应用）与 db.js（Turso 适配层）均为本目录内独立副本，
  * 配合同目录 Dockerfile 可直接部署（见 platforms/README.md「Fly.io / Railway」）。
@@ -87,7 +87,7 @@ const server = http.createServer(async function (req, res) {
 });
 
 server.listen(PORT, function () {
-  console.log("CloudSMSForCF node server listening on :" + PORT);
+  console.log("SMSToWeb node server listening on :" + PORT);
 });
 
 /* ---------------- 内置每日清理（UTC 17:00 = 北京 01:00，与 Worker 版 cron 一致） ---------------- */

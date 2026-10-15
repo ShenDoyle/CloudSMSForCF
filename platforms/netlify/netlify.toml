@@ -1,7 +1,7 @@
 # Netlify 部署配置（base = 本目录；产物由 platforms/build.py 生成，见 platforms/README.md）
 [build]
   publish = "public"
-  command = "echo 'CloudSMSForCF：无需构建步骤'"
+  command = "echo 'SMSToWeb：无需构建步骤'"
 
 [functions]
   directory = "functions"
