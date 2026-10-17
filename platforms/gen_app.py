@@ -40,8 +40,7 @@ ENTRY_FILES = [
     "netlify/functions/api.mjs",
     "netlify/functions/cron.mjs",
     "deno/main.js",
-    "edgeone/functions/[[default]].js",
-    "edgeone/functions/index.js",  # EdgeOne 根路径 / 只认 index.js，[[default]].js 不匹配 /（与 [[default]].js 逻辑同步维护）
+    "edgeone/functions/index.js",  # EdgeOne 根路径 / 只认 index.js；[[default]].js 仅 re-export 本文件 onRequest，无需同步 ENV_KEYS
     "node/server.mjs",
 ]
 
@@ -86,20 +85,14 @@ SCHED_SIG = "async scheduled(event, env) {"
 
 NEW_TAIL = """/* ---------------- 通用入口导出（本段由 platforms/gen_app.py 生成，勿手工修改） ----------------
  * 以上业务代码与 src/worker.js 逐字节一致；仅将 Worker 专属的 export default 替换为：
- *   fetchApp(request, env[, ctx])   — 请求处理主入口（ctx 可省略，内部提供 waitUntil 兜底）
+ *   fetchApp(request, env[, ctx])   — 请求处理主入口（ctx 可省略；省略时后台任务经 bgRun 内联执行）
  *   runCron(env)                    — 定时清理入口，供各平台原生 cron 调用
  *   handleCronRequest(request, env) — cron 的 HTTP 触发入口（GET /api/cron，token 鉴权）
  */
 
 export async function fetchApp(request, env, ctx) {
-  /* 非 Workers 运行时没有 ctx：提供 waitUntil 兜底实现（后台任务失败静默，不阻塞响应） */
-  if (!ctx) {
-    ctx = {
-      waitUntil: function (p) {
-        if (p && typeof p.catch === "function") p.catch(function () {});
-      },
-    };
-  }
+  /* ctx 由调用方传入：Cloudflare 传真实 ctx（waitUntil 后台续跑）；其他平台不传（undefined），
+     业务代码经 bgRun() 退化为内联 await，确保后台通知不被平台截断 */
 __BODY__
 }
 

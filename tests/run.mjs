@@ -1,0 +1,137 @@
+/**
+ * SMSToWeb 零依赖测试套件（需 Node 22.13+，用到内置 node:sqlite）
+ * 直接测生成的平台无关核心 platforms/node/app.js 的 fetchApp / runCron / handleCronRequest，
+ * 覆盖：收发、去重、列表、来源筛选、长轮询、删除、正文截断、定时清理、cron 鉴权、
+ *       登录鉴权、http cookie 降级、防锁死、写入限速、管理页开关 UI。
+ * 运行：node tests/run.mjs   （退出码 0=全过，1=有失败，2=异常）
+ */
+import { fetchApp, runCron, handleCronRequest } from "../platforms/node/app.js";
+import { LocalDatabase } from "../platforms/node/db.js";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const DB = join(tmpdir(), "smstoweb_test_" + process.pid + ".db");
+let pass = 0, fail = 0;
+const failed = [];
+function check(cond, name) {
+  if (cond) { pass++; console.log("  ok   " + name); }
+  else { fail++; failed.push(name); console.log("  FAIL " + name); }
+}
+function group(t) { console.log("\n# " + t); }
+function cleanup() {
+  for (const suf of ["", "-wal", "-shm", "-journal"]) { try { rmSync(DB + suf, { force: true }); } catch (_) {} }
+}
+
+const db = new LocalDatabase(DB);
+function env(extra) {
+  return Object.assign({ DB: db, RECEIVE_TOKEN: "tok", ENABLE_AUTH: "", ADMIN_PASSWORD: "", RETENTION_DAYS: "30" }, extra || {});
+}
+function R(method, path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {});
+  const init = { method: method, headers: headers };
+  if (opts.body !== undefined) {
+    init.body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
+    if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  }
+  if (opts.cookie) headers["Cookie"] = opts.cookie;
+  return new Request("http://localhost" + path, init);
+}
+async function call(method, path, e, opts) {
+  const r = await fetchApp(R(method, path, opts), e);
+  let data = null;
+  try { data = await r.json(); } catch (_) {}
+  return { status: r.status, data: data, setCookie: r.headers.get("Set-Cookie") || "" };
+}
+
+async function main() {
+  const e0 = env();
+
+  group("收发 / 去重 / 列表 / 筛选 / 长轮询 / 删除 / 截断（免登录）");
+  let r = await call("POST", "/api/push", e0, { body: { content: "no token here" } });
+  check(r.status === 403, "push 无 token → 403");
+
+  const body1 = { source: "notify", sender: "web-01", content: "hello 1", time: "2026-10-17 12:00:00" };
+  r = await call("POST", "/api/push?token=tok", e0, { body: body1 });
+  check(r.status === 200 && r.data && r.data.success === true && r.data.duplicated === false, "push 带 token → 入库成功");
+  r = await call("POST", "/api/push?token=tok", e0, { body: body1 });
+  check(r.data && r.data.duplicated === true, "相同内容+时间重推 → duplicated:true");
+
+  r = await call("POST", "/api/receive?token=tok", e0, { body: { name: "我的手机", sim: "13800000000", from: "10086", content: "验证码 123456", time: "2026-10-17 10:00:00" } });
+  check(r.status === 200 && r.data && r.data.success === true, "receive 短信 → 入库成功");
+
+  r = await call("GET", "/api/messages", e0);
+  check(r.status === 200 && r.data && r.data.total >= 2, "列表 total>=2");
+  check(r.data && r.data.list.some(m => m.content === "hello 1"), "列表含 push 的消息");
+  check(r.data && r.data.list.every(m => typeof m.sim_number === "string"), "每行带 sim_number 字段");
+
+  r = await call("GET", "/api/messages?source=sms", e0);
+  check(r.data && r.data.list.length === 1 && r.data.list[0].source === "sms", "来源筛选 source=sms 仅 1 条");
+
+  r = await call("GET", "/api/wait?last_id=0", e0);
+  check(r.data && r.data.changed === true, "长轮询 last_id=0 有更新 → changed:true 立即返回");
+
+  const list = (await call("GET", "/api/messages", e0)).data.list;
+  r = await call("DELETE", "/api/messages/" + list[list.length - 1].id, e0);
+  check(r.data && r.data.success === true && r.data.deleted === 1, "删除单条消息成功");
+
+  r = await call("POST", "/api/push?token=tok", e0, { body: { sender: "big", content: "x".repeat(10000) } });
+  check(r.status === 200, "超长正文 push 仍成功（截断而非报错）");
+  const big = (await call("GET", "/api/messages?q=xxxxx&limit=100", e0)).data.list.filter(m => m.sender === "big");
+  check(big.length === 1 && big[0].content.length === 8000, "超长正文被截断到 8000 字");
+
+  const home = await fetchApp(R("GET", "/", {}), e0);
+  const homeHtml = await home.text();
+  check(home.status === 200 && /class="switch"/.test(homeHtml) && /自动复制验证码/.test(homeHtml), "管理页渲染且含新开关 UI");
+
+  group("定时清理 runCron / cron HTTP 鉴权");
+  await db.prepare("INSERT INTO messages(device_id, sender, content, received_at, source) SELECT id,'old','old msg xyz','2000-01-01 00:00:00','sms' FROM devices LIMIT 1").run();
+  const before = (await db.prepare("SELECT COUNT(*) AS n FROM messages WHERE content='old msg xyz'").first()).n;
+  await runCron(env({ RETENTION_DAYS: "1" }));
+  const after = (await db.prepare("SELECT COUNT(*) AS n FROM messages WHERE content='old msg xyz'").first()).n;
+  check(before === 1 && after === 0, "超过保留期的旧消息被 cron 清理");
+  r = await handleCronRequest(R("GET", "/api/cron", {}), e0);
+  check(r.status === 403, "/api/cron 无 token → 403");
+  r = await handleCronRequest(R("GET", "/api/cron?token=tok", {}), e0);
+  check(r.status === 200, "/api/cron 带 token → 200");
+
+  group("登录鉴权 / http cookie 降级 / 防锁死");
+  const eAuth = env({ ENABLE_AUTH: "true", ADMIN_PASSWORD: "secret" });
+  r = await call("GET", "/api/messages", eAuth);
+  check(r.status === 401, "开登录后无 cookie → 401");
+  r = await call("POST", "/api/login", eAuth, { body: { password: "wrong" } });
+  check(r.status === 403, "登录密码错误 → 403");
+  r = await call("POST", "/api/login", eAuth, { body: { password: "secret" } });
+  check(r.status === 200 && r.data && r.data.success === true, "登录密码正确 → 200");
+  check(/sms_auth=/.test(r.setCookie), "登录下发 sms_auth cookie");
+  check(!/Secure/i.test(r.setCookie), "http 下 cookie 不带 Secure（降级，修复 Alook 登录）");
+  const cookie = (r.setCookie.match(/sms_auth=([^;]*)/) || [])[1] || "";
+  r = await call("GET", "/api/messages", eAuth, { cookie: "sms_auth=" + cookie });
+  check(r.status === 200, "带登录 cookie → 200");
+  const page = await (await fetchApp(R("GET", "/", {}), eAuth)).text();
+  check(/登 录/.test(page), "无 cookie 访问 / → 返回登录页");
+  r = await call("POST", "/api/push?token=tok", eAuth, { body: { content: "still works under auth" } });
+  check(r.status === 200, "开登录后 /api/push 仍可推送（公开接口）");
+  r = await call("GET", "/api/messages", env({ ENABLE_AUTH: "true", ADMIN_PASSWORD: "" }));
+  check(r.status === 200, "ENABLE_AUTH=true 但未设密码 → 免登录可访问（不锁死）");
+
+  group("写入接口限速");
+  let saw429 = false, allowed = 0;
+  for (let i = 0; i < 260 && !saw429; i++) {
+    const rr = await call("POST", "/api/push?token=tok", e0, { body: { content: "burst " + i } });
+    if (rr.status === 429) saw429 = true; else if (rr.status === 200) allowed++;
+  }
+  check(saw429 && allowed >= 1 && allowed < 260, "限速生效：放行一批后开始返回 429");
+
+  console.log("\n===== 结果：" + pass + " 通过，" + fail + " 失败 =====");
+  if (fail) console.log("失败项：\n - " + failed.join("\n - "));
+  cleanup();
+  process.exit(fail ? 1 : 0);
+}
+
+main().catch(function (e) {
+  console.error("测试异常：", e);
+  cleanup();
+  process.exit(2);
+});

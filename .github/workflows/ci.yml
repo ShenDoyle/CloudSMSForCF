@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 同步并校验零漂移
+        run: |
+          python platforms/gen_app.py
+          if ! git diff --exit-code -- src platforms; then
+            echo "::error::gen_app.py 产生漂移：请运行 python platforms/gen_app.py 后提交同步结果"
+            exit 1
+          fi
+
+      - name: 语法检查
+        run: |
+          for f in src/worker.js platforms/shared/app.js platforms/node/server.mjs platforms/node/db.js \
+                   platforms/vercel/api/*.js platforms/netlify/functions/*.mjs platforms/deno/main.js \
+                   platforms/edgeone/functions/*.js; do
+            node --check "$f"
+          done
+
+      - name: 测试（Node 22.13+ 零依赖）
+        run: node tests/run.mjs

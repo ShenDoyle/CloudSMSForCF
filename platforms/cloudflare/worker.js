@@ -35,6 +35,8 @@ const CORS = {
 };
 
 const DEFAULT_RETENTION_DAYS = 30;
+/* 单条消息正文字数上限：超出截断，防止超大载荷撑爆存储 */
+const MAX_CONTENT = 8000;
 
 /* 站名与图标：可用变量 SITE_NAME / SITE_ICON 覆盖；图标设置了但加载失败时前端自动回退默认 */
 const DEFAULT_SITE_NAME = "短信网关";
@@ -71,7 +73,7 @@ function renderHtml(html, env) {
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...CORS },
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...CORS },
   });
 }
 
@@ -89,13 +91,30 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
+/* 后台任务调度：Cloudflare 传真实 ctx，用 ctx.waitUntil（响应即时返回、后台续跑）；
+   其他平台不传 ctx（undefined），退化为内联 await，确保通知在响应前完成、不被平台截断 */
+function bgRun(ctx, p) {
+  if (ctx && typeof ctx.waitUntil === "function") { ctx.waitUntil(p); return; }
+  return p;
+}
+
 /* ---------------- 管理页登录（可选，由 ENABLE_AUTH 开关控制） ---------------- */
 
 const AUTH_COOKIE = "sms_auth";
 
-/* 开关是否处于开启状态（仅字符串 "true" 视为开启） */
+/* 开关是否处于开启状态（仅字符串 "true" 视为开启）。
+   开启但未设 ADMIN_PASSWORD 时按免登录处理并告警一次——避免"开了登录却忘设密码"把自己锁死在登录页外 */
+let warnedAuthNoPw = false;
 function authEnabled(env) {
-  return String(env.ENABLE_AUTH || "").trim().toLowerCase() === "true";
+  if (String(env.ENABLE_AUTH || "").trim().toLowerCase() !== "true") return false;
+  if (!String(env.ADMIN_PASSWORD || "")) {
+    if (!warnedAuthNoPw) {
+      warnedAuthNoPw = true;
+      console.warn("ENABLE_AUTH=true 但未设置 ADMIN_PASSWORD：已按免登录处理，设置密码后即启用登录");
+    }
+    return false;
+  }
+  return true;
 }
 
 /* 无状态登录凭证：SHA-256("sms-gateway-auth-v1|" + 密码)，密码不变则凭证稳定，无需存储 */
@@ -194,6 +213,21 @@ async function handleLogin(request, env) {
 }
 
 function clearLoginFail(request) { loginFails.delete(clientIp(request)); }
+
+/* 写入接口（/api/receive、/api/push）限速：每 IP 每分钟 WRITE_RATE_LIMIT 次，超出返回 429。
+   内存态、实例重启清零，Serverless 多实例下为尽力而为的软限制；用于遏制 token 泄露后被网页/脚本刷库 */
+const WRITE_RATE_LIMIT = 120;
+const WRITE_RATE_WINDOW_MS = 60 * 1000;
+const writeRate = new Map(); /* ip -> { count, reset } */
+function allowWrite(request) {
+  const ip = clientIp(request);
+  const now = Date.now();
+  let rec = writeRate.get(ip);
+  if (!rec || now >= rec.reset) { rec = { count: 0, reset: now + WRITE_RATE_WINDOW_MS }; writeRate.set(ip, rec); }
+  rec.count += 1;
+  if (writeRate.size > 5000) { for (const [k, v] of writeRate) if (now >= v.reset) writeRate.delete(k); }
+  return rec.count <= WRITE_RATE_LIMIT;
+}
 
 function handleLogout(request) {
   return new Response(JSON.stringify({ success: true }), {
@@ -294,11 +328,16 @@ function trimEnv(v) {
 
 /* 通知渠道通用 POST；非 2xx 抛错由调用方记日志（不抛出影响主流程） */
 async function postNotify(url, headers, body) {
-  const res = await fetch(url, {
+  const opts = {
     method: "POST",
     headers: Object.assign({ "Content-Type": "application/json" }, headers || {}),
     body: body,
-  });
+  };
+  /* 单渠道 10s 超时：避免慢/挂起的第三方把内联 await 的响应拖死（无 waitUntil 的平台） */
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    opts.signal = AbortSignal.timeout(10000);
+  }
+  const res = await fetch(url, opts);
   if (!res.ok) throw new Error("HTTP " + res.status);
 }
 
@@ -470,6 +509,7 @@ function dispatchNotify(env, msg) {
 /* ---------------- 接收（短信：SmsForwarder 等 App Webhook） ---------------- */
 
 async function handleReceive(request, env, url, ctx) {
+  if (!allowWrite(request)) return json({ success: false, error: "too many requests" }, 429);
   const data = await parseIncoming(request, url);
   if (!data) return json({ success: false, error: "invalid body" }, 400);
 
@@ -479,6 +519,7 @@ async function handleReceive(request, env, url, ctx) {
     return json({ success: false, error: "unauthorized" }, 403);
   }
   if (!data.content) return json({ success: false, error: "empty content" }, 400);
+  data.content = String(data.content).slice(0, MAX_CONTENT);
 
   // App 变量未渲染时值为 {{XXX}} 字面量：置空避免产生脏标签（标签名请在 App 模板中直接填自定义名称）
   if (String(data.name).indexOf("{{") !== -1) data.name = "";
@@ -500,7 +541,7 @@ async function handleReceive(request, env, url, ctx) {
 
   if (!duplicated) {
     const head = "【短信】" + (data.sim || "未知收件号") + (data.from ? " ← " + data.from : "");
-    ctx.waitUntil(dispatchNotify(env, {
+    await bgRun(ctx, dispatchNotify(env, {
       title: head,
       content: data.content,
       time: bjTime(receivedAt),
@@ -524,6 +565,7 @@ async function handleReceive(request, env, url, ctx) {
  *   name   — 设备标签名（与短信标签并列展示），默认「通知网关」；兼容旧字段 device
  */
 async function handlePush(request, env, url, ctx) {
+  if (!allowWrite(request)) return json({ success: false, error: "too many requests" }, 429);
   let body;
   try { body = await request.json(); } catch { return json({ success: false, error: "invalid json" }, 400); }
   if (!body || typeof body !== "object") return json({ success: false, error: "invalid body" }, 400);
@@ -532,8 +574,9 @@ async function handlePush(request, env, url, ctx) {
   if (!env.RECEIVE_TOKEN || !provided || !safeEqual(provided, env.RECEIVE_TOKEN)) {
     return json({ success: false, error: "unauthorized" }, 403);
   }
-  const content = String(body.content || body.text || body.message || body.msg || "").trim();
+  let content = String(body.content || body.text || body.message || body.msg || "").trim();
   if (!content) return json({ success: false, error: "empty content" }, 400);
+  content = content.slice(0, MAX_CONTENT);
 
   const source = (String(body.source || "notify").trim() || "notify").slice(0, 20);
   const sender = String(body.sender || body.title || body.from || "").trim().slice(0, 100);
@@ -553,7 +596,7 @@ async function handlePush(request, env, url, ctx) {
 
   if (!duplicated) {
     const head = "【" + source + "】" + (sender ? sender + " · " : "") + deviceName;
-    ctx.waitUntil(dispatchNotify(env, {
+    await bgRun(ctx, dispatchNotify(env, {
       title: head,
       content: content,
       time: bjTime(receivedAt),

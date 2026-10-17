@@ -74,7 +74,8 @@ Cloudflare 平台额外需要 `DB`（D1 绑定）；其余平台需要 `TURSO_DA
 - `platforms/gen_app.py`：从 `src/worker.js` 生成平台无关的 `app.js` 同步到五个移植平台，并同步 Cloudflare 独立副本 `worker.js`（保证六平台业务代码逐字节一致）；同时把 27 个渠道/站点环境变量白名单（ENV_KEYS）同步到六个平台入口，防各平台透传漂移（node 的 db.js 为 Turso+本地 SQLite 双适配，独立维护不参与同步）
 - `platforms/*/`：各平台自包含部署目录（入口 + app.js + db.js 适配层 + schema.sql + 本平台教程）
 - `docs/多平台接入部署指南.md`：接收端配置文档
-- 修改核心代码后：`python platforms/gen_app.py` 重新同步全部平台
+- `tests/run.mjs`：零依赖测试套件（需 Node 22.13+）：`node tests/run.mjs`
+- 修改核心代码后：`python platforms/gen_app.py` 重新同步全部平台，再跑 `node tests/run.mjs`；CI 会校验同步零漂移 + 语法 + 测试
 
 ## License
 
