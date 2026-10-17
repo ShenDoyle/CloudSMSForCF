@@ -107,6 +107,19 @@ async function authCookieValue(password) {
   return Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
 }
 
+/* 是否 HTTPS：据此决定 cookie 是否带 Secure。局域网 IP / 无 TLS 的 http 自托管若强制 Secure，
+   浏览器会拒存 cookie，导致输入密码后刷新又跳回登录页（安卓第三方浏览器尤明显）*/
+function isHttps(request) {
+  const xf = (request.headers.get("x-forwarded-proto") || "").split(",")[0].trim().toLowerCase();
+  if (xf) return xf === "https";
+  try { return new URL(request.url).protocol === "https:"; } catch (e) { return false; }
+}
+/* 登录/登出 cookie 头：HTTPS 下带 Secure，http 下降级（保证明文部署也能正常登录） */
+function authCookieHeader(request, value, maxAge) {
+  return AUTH_COOKIE + "=" + value + "; Path=/; HttpOnly; " +
+    (isHttps(request) ? "Secure; " : "") + "SameSite=Lax; Max-Age=" + maxAge;
+}
+
 function getCookie(request, name) {
   const raw = request.headers.get("Cookie") || "";
   for (const part of raw.split(";")) {
@@ -174,7 +187,7 @@ async function handleLogin(request, env) {
   return new Response(JSON.stringify({ success: true }), {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Set-Cookie": AUTH_COOKIE + "=" + token + "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800",
+      "Set-Cookie": authCookieHeader(request, token, 604800),
       ...CORS,
     },
   });
@@ -182,11 +195,11 @@ async function handleLogin(request, env) {
 
 function clearLoginFail(request) { loginFails.delete(clientIp(request)); }
 
-function handleLogout() {
+function handleLogout(request) {
   return new Response(JSON.stringify({ success: true }), {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Set-Cookie": AUTH_COOKIE + "=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+      "Set-Cookie": authCookieHeader(request, "", 0),
       ...CORS,
     },
   });
@@ -685,7 +698,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
     --accent: #15803d; --accent-deep: #116632;
     --badge-bg: #e7f4ec; --sender: #0f766e; --link: #2563eb;
     --code-bg: #fef3c7; --code-border: #fcd34d; --code-text: #92400e; --code-hover: #fde68a;
-    --del: #9aa3ab; --del-hover: #b91c1c; --tabx: #e8b4b4;
+    --del: #9aa3ab; --del-hover: #b91c1c; --tabx: #e8b4b4; --sw-off: #c7ced4;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -694,7 +707,7 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
       --accent: #22a04f; --accent-deep: #1a8a41;
       --badge-bg: #12351f; --sender: #4fd1a5; --link: #6ea8ff;
       --code-bg: #3a2f14; --code-border: #6b5518; --code-text: #fbd46d; --code-hover: #4a3c1a;
-      --del: #6b7480; --del-hover: #f87171; --tabx: #8a4a4a;
+      --del: #6b7480; --del-hover: #f87171; --tabx: #8a4a4a; --sw-off: #3a424a;
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -711,9 +724,18 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
          border-radius: 8px; font-size: 14px; background: var(--card); color: var(--text); }
   .toolbar select { padding: 8px 8px; border: 1px solid var(--border); border-radius: 8px;
          font-size: 13px; background: var(--card); color: var(--text); }
-  .opts { display: flex; gap: 16px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
-  .opt { cursor: pointer; user-select: none; }
-  .opt input { vertical-align: -2px; margin-right: 4px; accent-color: var(--accent); }
+  .opts { display: flex; gap: 22px; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+  .opt { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .opt input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .opt .switch { position: relative; flex: none; width: 40px; height: 22px; border-radius: 999px;
+                 background: var(--sw-off); border: 1px solid var(--border);
+                 transition: background .2s ease, border-color .2s ease; }
+  .opt .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                        border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.28);
+                        transition: transform .2s ease; }
+  .opt input:checked + .switch { background: var(--accent); border-color: var(--accent); }
+  .opt input:checked + .switch::after { transform: translateX(18px); }
+  .opt input:focus-visible + .switch { outline: 2px solid var(--link); outline-offset: 2px; }
   .meta { display: flex; justify-content: space-between; align-items: center;
           color: var(--muted); font-size: 12px; margin-bottom: 8px; }
   .list { display: flex; flex-direction: column; gap: 8px; }
@@ -778,8 +800,8 @@ const PAGE_HTML = String.raw`<!DOCTYPE html>
     </select>
   </div>
   <div class="opts">
-    <label class="opt"><input type="checkbox" id="autocopy">自动复制验证码</label>
-    <label class="opt"><input type="checkbox" id="notifyon">后台通知</label>
+    <label class="opt"><input type="checkbox" id="autocopy"><span class="switch"></span><span>自动复制验证码</span></label>
+    <label class="opt"><input type="checkbox" id="notifyon"><span class="switch"></span><span>后台通知</span></label>
   </div>
   <div class="meta"><span id="stat"></span><span id="pageinfo"></span></div>
   <div class="list" id="list"><div class="empty">加载中…</div></div>
@@ -1255,7 +1277,7 @@ export default {
         return await handleLogin(request, env);
       }
       if (path === "/api/logout" && request.method === "POST") {
-        return handleLogout();
+        return handleLogout(request);
       }
       if (path === "/api/messages" && request.method === "GET") {
         return await handleListMessages(url, env);
