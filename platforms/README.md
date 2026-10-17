@@ -51,7 +51,7 @@ turso db shell sms-gateway < schema.sql   # 建表
 | `TURSO_AUTH_TOKEN` | 是 | 数据库访问令牌 |
 | `RECEIVE_TOKEN` | 是 | 推送鉴权密钥（与接入端 URL 中 `token=` 一致） |
 | `ENABLE_AUTH` | 否 | `"true"` 管理页需登录（**安全强烈建议开启**，见下方安全建议）；默认免登录 |
-| `ADMIN_PASSWORD` | 否 | 登录密码（`ENABLE_AUTH="true"` 时必填） |
+| `ADMIN_PASSWORD` | 否 | 登录密码（`ENABLE_AUTH="true"` 时配置；漏配不会锁死——按免登录运行并告警） |
 | `RETENTION_DAYS` | 否 | 数据保留天数，默认 30 |
 | 通知渠道变量 | 否 | `FEISHU_WEBHOOK`（飞书）/ `WECOM_WEBHOOK`（企微）/ `DINGTALK_WEBHOOK`（钉钉，可选 `DINGTALK_SECRET` 加签）/ `SERVERCHAN_SENDKEY` / `PUSHPLUS_TOKEN` / `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID` / `BARK_DEVICE_KEY`（可选 `BARK_URL`）/ `NTFY_URL`（可选 `NTFY_TOKEN`）/ `GOTIFY_URL`+`GOTIFY_TOKEN` / `RESEND_API_KEY`+`MAIL_TO`（邮件，可选 `MAIL_FROM`）/ `GENERIC_WEBHOOKS`（通用 Webhook，可选 `GENERIC_WEBHOOK_TEMPLATE` 请求体 / `GENERIC_WEBHOOK_HEADERS` 请求头）。配置哪个转发哪个，全部不配置则不转发 |
 | `SITE_NAME` / `SITE_ICON` | 否 | 网站名 / 图标 URL，未设置用默认值 |
@@ -59,7 +59,7 @@ turso db shell sms-gateway < schema.sql   # 建表
 | `SQLITE_PATH`（仅 node 自托管） | 否 | 本地 SQLite 模式：设置后免外部数据库（需 Node 22.13+，见 node/README.md） |
 
 > **安全强烈建议**
-> 1. **开启管理页登录**（`ENABLE_AUTH="true"` + `ADMIN_PASSWORD`）：管理页承载短信验证码等敏感内容，默认免登录意味着知道域名的人都能查看全部消息并删除数据。登录接口已内置限速（同 IP 连续失败 5 次锁定 10 分钟）。
+> 1. **开启管理页登录**（`ENABLE_AUTH="true"` + `ADMIN_PASSWORD`）：管理页承载短信验证码等敏感内容，默认免登录意味着知道域名的人都能查看全部消息并删除数据。登录接口已内置限速（同 IP 连续失败 5 次锁定 10 分钟）；`/api/receive`、`/api/push` 另有每 IP 每分钟 120 次的写入限速（超限返回 429）。
 > 2. **推送 token 走 URL query 的取舍**：为兼容 SmsForwarder 等客户端，`/api/receive`、`/api/push` 支持 `?token=` 查询参数传鉴权——token 会出现在 URL 中，可能进入平台访问日志、浏览器历史。介意的话请改用 POST + 请求头 `Authorization: Bearer <RECEIVE_TOKEN>` 传递（两种方式都支持）。
 
 ## 目录结构
@@ -77,7 +77,7 @@ platforms/
 ```
 
 每个平台目录可单独作为部署根目录（Git 部署时把平台 Root Directory 指到对应子目录即可），
-零 npm 依赖、无需构建。`src/worker.js` 有更新后执行 `python platforms/gen_app.py` 一键同步全部平台。
+零 npm 依赖、无需构建。`src/worker.js` 有更新后执行 `python platforms/gen_app.py` 一键同步全部平台（CI 校验零漂移，`node tests/run.mjs` 覆盖 26 项功能断言）。
 
 ## 从 Cloudflare Worker 迁移到其他平台
 

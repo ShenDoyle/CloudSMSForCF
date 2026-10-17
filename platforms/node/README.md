@@ -108,4 +108,5 @@ curl "http://127.0.0.1:8787/api/push?token=<RECEIVE_TOKEN>" -H "Content-Type: ap
 - **免费额度**：Fly.io 已无免费额度（仅新账号 7 天 / 2 VM 小时试用，绑卡即转按量计费，微用量费用很低）；Railway 提供一次性 $5 试用额度（30 天有效），Hobby 计划 $5/月含等额使用额度——长期零成本首选 Cloudflare 主版本
 - **数据备份**：Turso 模式下数据都在 Turso，换服务器只需重新配好环境变量，数据无损；本地 SQLite 模式定期备份 `SQLITE_PATH` 文件即可
 - **登录保护**：登录接口已内置限速——同一 IP 连续失败 5 次锁定 10 分钟（内存态，进程重启即清零）
+- **http 部署登录**：局域网 IP / 无 TLS 的 http 访问可直接登录（cookie 自动降级，不强制 Secure），Alook 等浏览器登录后跳转正常
 - **日志排查**：`fly logs` / Railway Deployments → Logs / `docker logs smstoweb`

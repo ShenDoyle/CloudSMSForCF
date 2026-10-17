@@ -2,7 +2,7 @@
 
 把 SMSToWeb 部署到腾讯 EdgeOne Makers（原 EdgeOne Pages，Functions + Turso 数据库）。国内访问体验好，全程约 15 分钟。
 
-**本目录文件**：`functions/[[default]].js`（入口，兜底捕获全部路由）、`functions/index.js`（根路径 `/` 专用入口，逻辑与兜底入口一致，两处需同步维护）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）。
+**本目录文件**：`functions/index.js`（根路径 `/` 专用入口，全部逻辑与 ENV_KEYS 白名单的单一来源）、`functions/[[default]].js`（兜底捕获其余路由，仅 re-export index.js，无需单独维护）、`app.js`（核心应用）、`db.js`（Turso 适配层）、`schema.sql`（建表）。
 
 ---
 
